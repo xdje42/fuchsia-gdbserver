@@ -741,6 +741,9 @@ bool CommandHandler::HandleQueryRcmd(const ftl::StringView& command,
   // We support both because qemu uses "quit" and GNU gdbserver uses "exit".
   if (cmd == kQuit || cmd == kExit) {
     ReplyOK(callback);
+    // FIXME: This only works because gdb sends an Ack to the OK.
+    // That causes the read() to return, finishes the read task, and
+    // then allows this quit request to be processed.
     server_->PostQuitMessageLoop(true);
   } else if (cmd == kHelp) {
     std::string text;

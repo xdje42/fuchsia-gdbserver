@@ -52,6 +52,10 @@ class RegistersDefault final : public Registers {
   }
 
   bool SetSingleStep(bool enable) override { return false; }
+
+  std::string FormatRegset(int regset) override {
+    return "unimplemented\n";
+  }
 };
 
 }  // namespace

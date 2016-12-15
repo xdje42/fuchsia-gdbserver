@@ -21,6 +21,7 @@
 #include "exception-port.h"
 #include "memory-process.h"
 #include "thread.h"
+#include "util.h"
 
 namespace debugserver {
 
@@ -60,16 +61,19 @@ class Process final {
         const mx_exception_context_t& context) = 0;
   };
 
+  // Note: |argv| includes the program to debug in argv[0].
   // TODO(armansito): Add a different constructor later for attaching to an
   // already running process.
   explicit Process(Server* server,
                    Delegate* delegate,
-                   const std::vector<std::string>& argv);
+                   const util::Argv& argv);
   ~Process();
 
   std::string GetName() const;
 
-  void set_argv(const std::vector<std::string>& argv) { argv_ = argv; }
+  // Note: This includes the program in |argv[0]|.
+  const util::Argv& argv() { return argv_; }
+  void set_argv(const util::Argv& argv) { argv_ = argv; }
 
   // Returns the current state of this process.
   State state() const { return state_; }
@@ -159,10 +163,23 @@ class Process final {
   // into the inferior.
   bool DsosLoaded() { return dsos_ != nullptr; }
 
+  // Return list of loaded dsos.
+  // Returns nullptr if none loaded yet or loading failed.
+  // TODO(dje): constness wip
+  elf::dsoinfo_t* GetDsos() const { return dsos_; }
+
   // Return the entry for the main executable from the dsos list.
   // Returns nullptr if not present (could happen if inferior data structure
   // has been clobbered).
   const elf::dsoinfo_t* GetExecDso();
+
+  // Return the DSO for |pc| or nullptr if none.
+  // TODO(dje): Result is not const for debug file lookup.
+  elf::dsoinfo_t* LookupDso(mx_vaddr_t pc) const;
+
+  // Try building the dso list.
+  // This one is for use by mydb.
+  void TryBuildLoadedDsosList();
 
  private:
   Process() = default;
@@ -176,10 +193,12 @@ class Process final {
   void Clear();
 
   // Build list of loaded dsos.
-  // |thread| is the thread we stopped in.
-  // TODO(dje): This is normally only called once, after the main executable
-  // has been loaded. Therefore this list will not contain subsequently loaded
-  // dsos.
+  // If |thread| is non-null it is the thread we stopped in and is used
+  // by the rsp server: Only try to build the dso list when we stop at the
+  // dynamic linker breakpoint.
+  // TODO(dje): For the rsp server this is only called once, after the main
+  // executable has been loaded. Therefore this list will not contain
+  // subsequently loaded dsos.
   void TryBuildLoadedDsosList(Thread* thread);
 
   // The server that owns us.
@@ -189,7 +208,7 @@ class Process final {
   Delegate* delegate_;  // weak
 
   // The argv that this process was initialized with.
-  std::vector<std::string> argv_;
+  util::Argv argv_;
 
   // The launchpad_t instance used to bootstrap and run the process. The Process
   // owns this instance and holds on to it until it gets destroyed.

@@ -79,6 +79,10 @@ class RegistersArm64 final : public Registers {
     FTL_NOTIMPLEMENTED();
     return false;
   }
+
+  std::string FormatRegset(int regset) override {
+    return "unimplemented\n";
+  }
 };
 
 }  // namespace

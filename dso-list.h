@@ -42,7 +42,9 @@ extern dsoinfo_t* dso_lookup(dsoinfo_t* dso_list, mx_vaddr_t pc);
 
 extern dsoinfo_t* dso_get_main_exec(dsoinfo_t* dso_list);
 
-extern void dso_vlog_list(dsoinfo_t* dso_list);
+extern void dso_print_list(const dsoinfo_t* dso_list);
+
+extern void dso_vlog_list(const dsoinfo_t* dso_list);
 
 extern mx_status_t dso_find_debug_file(dsoinfo_t* dso,
                                        const char** out_debug_file);

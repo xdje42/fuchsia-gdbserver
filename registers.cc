@@ -15,7 +15,7 @@ namespace arch {
 
 Registers::Registers(Thread* thread) : thread_(thread) {
   FTL_DCHECK(thread);
-  FTL_DCHECK(thread->debug_handle() != MX_HANDLE_INVALID);
+  FTL_DCHECK(thread->handle() != MX_HANDLE_INVALID);
 }
 
 bool Registers::RefreshGeneralRegisters() {
@@ -40,6 +40,22 @@ mx_vaddr_t Registers::GetPC() {
   bool success = GetRegister(regno, &pc, sizeof(pc));
   FTL_DCHECK(success);
   return pc;
+}
+
+mx_vaddr_t Registers::GetSP() {
+  int regno = GetSPRegisterNumber();
+  mx_vaddr_t sp;
+  bool success = GetRegister(regno, &sp, sizeof(sp));
+  FTL_DCHECK(success);
+  return sp;
+}
+
+mx_vaddr_t Registers::GetFP() {
+  int regno = GetFPRegisterNumber();
+  mx_vaddr_t fp;
+  bool success = GetRegister(regno, &fp, sizeof(fp));
+  FTL_DCHECK(success);
+  return fp;
 }
 
 }  // namespace arch

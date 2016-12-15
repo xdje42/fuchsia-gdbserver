@@ -14,7 +14,6 @@
 
 namespace debugserver {
 
-class Server;
 class Thread;
 
 // Utility class for holding the thread action list argument to vCont packets.
@@ -73,7 +72,7 @@ class ThreadActionList final {
 
   ~ThreadActionList() = default;
 
-  bool valid() const { return valid_; }
+  bool valid() const { return valid_; } // TODO xyzdje: deletable?
 
   // Call this after resolving all zero tid values, which means to "pick one".
   // This must be called before calling GetAction.
