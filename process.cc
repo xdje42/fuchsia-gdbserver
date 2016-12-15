@@ -17,9 +17,6 @@
 #include "server.h"
 #include "util.h"
 
-using std::string;
-using std::vector;
-
 // This is a global variable that exists in the dynamic linker, and thus in
 // every processes's address space (since Fuchsia is PIE-only). It contains
 // various information provided by the dynamic linker for use by debugging
@@ -29,7 +26,7 @@ extern struct r_debug* _dl_debug_addr;
 namespace debugserver {
 namespace {
 
-bool SetupLaunchpad(launchpad_t** out_lp, const vector<string>& argv) {
+bool SetupLaunchpad(launchpad_t** out_lp, const util::Argv& argv) {
   FTL_DCHECK(out_lp);
   FTL_DCHECK(argv.size() > 0);
 
@@ -68,7 +65,7 @@ fail:
   return false;
 }
 
-bool LoadBinary(launchpad_t* lp, const string& binary_path) {
+bool LoadBinary(launchpad_t* lp, const std::string& binary_path) {
   FTL_DCHECK(lp);
 
   mx_status_t status =
@@ -132,14 +129,14 @@ mx_handle_t GetProcessDebugHandle(mx_koid_t pid) {
 
 // static
 const char* Process::StateName(Process::State state) {
-#define CASE_TO_STR(x) \
-  case x:              \
+#define CASE_TO_STR(x)     \
+  case Process::State::x:  \
     return #x
   switch (state) {
-    CASE_TO_STR(Process::State::kNew);
-    CASE_TO_STR(Process::State::kStarting);
-    CASE_TO_STR(Process::State::kRunning);
-    CASE_TO_STR(Process::State::kGone);
+    CASE_TO_STR(kNew);
+    CASE_TO_STR(kStarting);
+    CASE_TO_STR(kRunning);
+    CASE_TO_STR(kGone);
     default:
       break;
   }
@@ -147,7 +144,7 @@ const char* Process::StateName(Process::State state) {
   return "(unknown)";
 }
 
-Process::Process(Server* server, Delegate* delegate, const vector<string>& argv)
+Process::Process(Server* server, Delegate* delegate, const util::Argv& argv)
     : server_(server),
       delegate_(delegate),
       argv_(argv),
@@ -192,6 +189,8 @@ bool Process::Initialize() {
     FTL_LOG(ERROR) << "No program specified";
     return false;
   }
+
+  FTL_LOG(INFO) << "argv: " << util::ArgvToString(argv_);
 
   if (!SetupLaunchpad(&launchpad_, argv_))
     return false;
@@ -440,7 +439,7 @@ bool Process::RefreshAllThreads() {
       continue;
     }
     new_threads[thread_id] =
-        std::make_unique<Thread>(this, thread_debug_handle, thread_id);
+      std::make_unique<Thread>(this, thread_debug_handle, thread_id);
   }
 
   // Just clear the existing list and repopulate it.
@@ -473,9 +472,6 @@ bool Process::WriteMemory(uintptr_t address, const void* data, size_t length) {
 void Process::TryBuildLoadedDsosList(Thread* thread) {
   FTL_DCHECK(dsos_ == nullptr);
 
-  if (dsos_build_failed_)
-    return;
-
   FTL_VLOG(2) << "Building dso list";
 
   // TODO(dje): For now we make the simplifying assumption that the address of
@@ -493,14 +489,16 @@ void Process::TryBuildLoadedDsosList(Thread* thread) {
     return;
   }
 
-  // Did we stop at the dynamic linker debug breakpoint?
-  bool success = thread->registers()->RefreshGeneralRegisters();
-  FTL_DCHECK(success);
-  mx_vaddr_t pc = thread->registers()->GetPC();
-  // TODO(dje): -1: adjust_pc_after_break
-  if (pc - 1 != debug.r_brk) {
-    FTL_VLOG(2) << "not stopped at dynlink debug bkpt";
-    return;
+  if (thread) {
+    // Did we stop at the dynamic linker debug breakpoint?
+    bool success = thread->registers()->RefreshGeneralRegisters();
+    FTL_DCHECK(success);
+    mx_vaddr_t pc = thread->registers()->GetPC();
+    // TODO(dje): -1: adjust_pc_after_break
+    if (pc - 1 != debug.r_brk) {
+      FTL_VLOG(2) << "not stopped at dynlink debug bkpt";
+      return;
+    }
   }
 
   auto lmap_vaddr = reinterpret_cast<mx_vaddr_t>(debug.r_map);
@@ -513,7 +511,12 @@ void Process::TryBuildLoadedDsosList(Thread* thread) {
     dsos_build_failed_ = true;
   } else {
     elf::dso_vlog_list(dsos_);
+    dsos_build_failed_ = false;
   }
+}
+
+void Process::TryBuildLoadedDsosList() {
+  TryBuildLoadedDsosList(nullptr);
 }
 
 void Process::OnException(const mx_excp_type_t type,
@@ -527,7 +530,8 @@ void Process::OnException(const mx_excp_type_t type,
   // breakpoint. For now gdb sets that breakpoint. What we do is watch for
   // s/w breakpoint exceptions.
   if (type == MX_EXCP_SW_BREAKPOINT) {
-    if (!DsosLoaded())
+    FTL_DCHECK(thread);
+    if (!DsosLoaded() && !dsos_build_failed_)
       TryBuildLoadedDsosList(thread);
   }
 
@@ -546,6 +550,11 @@ void Process::OnException(const mx_excp_type_t type,
       FTL_DCHECK(thread);
       FTL_DCHECK(thread->state() == Thread::State::kNew);
       delegate_->OnThreadStarted(this, thread, context);
+      // Delay updating process state until after notifying the
+      // delegate so that it can see the previous state.
+      // Once a thread has started the process is running.
+      if (state_ == Process::State::kStarting)
+        set_state(Process::State::kRunning);
       break;
     case MX_EXCP_GONE:
       if (thread) {
@@ -585,6 +594,10 @@ int Process::ExitCode() {
 
 const elf::dsoinfo_t* Process::GetExecDso() {
   return dso_get_main_exec(dsos_);
+}
+
+elf::dsoinfo_t* Process::LookupDso(mx_vaddr_t pc) const {
+  return elf::dso_lookup(dsos_, pc);
 }
 
 }  // namespace debugserver

@@ -15,9 +15,14 @@
 
 namespace debugserver {
 
-IOLoop::IOLoop(int fd, Delegate* delegate)
-    : quit_called_(false), fd_(fd), delegate_(delegate), is_running_(false) {
-  FTL_DCHECK(fd_ >= 0);
+IOLoop::IOLoop(int in_fd, int out_fd, Delegate* delegate)
+    : quit_called_(false),
+      in_fd_(in_fd),
+      out_fd_(out_fd),
+      delegate_(delegate),
+      is_running_(false) {
+  FTL_DCHECK(in_fd_ >= 0);
+  FTL_DCHECK(out_fd_ >= 0);
   FTL_DCHECK(delegate_);
   FTL_DCHECK(mtl::MessageLoop::GetCurrent());
 
@@ -35,13 +40,13 @@ void IOLoop::Run() {
   read_thread_ = mtl::CreateThread(&read_task_runner_, "i/o loop read task");
   write_thread_ = mtl::CreateThread(&write_task_runner_, "i/o loop write task");
 
-  StartReadLoop();
+  PostReadTask();
 }
 
 void IOLoop::Quit() {
   FTL_DCHECK(is_running_);
 
-  FTL_LOG(INFO) << "Quitting socket I/O loop";
+  FTL_LOG(INFO) << "Quitting I/O loop";
 
   quit_called_ = true;
 
@@ -58,7 +63,7 @@ void IOLoop::Quit() {
   if (write_thread_.joinable())
     write_thread_.join();
 
-  FTL_LOG(INFO) << "Socket I/O loop exited";
+  FTL_LOG(INFO) << "I/O loop exited";
 }
 
 void IOLoop::OnReadTask() {
@@ -100,6 +105,26 @@ void IOLoop::StartReadLoop() {
   // Make sure the call is coming from the origin thread.
   FTL_DCHECK(mtl::MessageLoop::GetCurrent()->task_runner().get() ==
              origin_task_runner_.get());
+  read_task_runner_->PostTask(std::bind(&IOLoop::OnReadTask, this));
+}
+
+void IOLoop::UnblockIO() {
+  close(in_fd_);
+  in_fd_ = -1;
+}
+
+void IOLoop::PostReadTask() {
+  // Make sure the call is coming from the origin thread.
+  FTL_DCHECK(mtl::MessageLoop::GetCurrent()->task_runner().get() ==
+             origin_task_runner_.get());
+
+  // TODO(armansito): Pass a refptr/weakptr to |this|?
+  ftl::Closure read_task = [this, &read_task] {
+    bool another = ReadTask();
+
+    if (another && !quit_called_)
+      read_task_runner_->PostTask(read_task);
+  };
 
   read_task_runner_->PostTask(std::bind(&IOLoop::OnReadTask, this));
 }
@@ -108,17 +133,34 @@ void IOLoop::PostWriteTask(const ftl::StringView& bytes) {
   // We copy the data into the closure.
   // TODO(armansito): Pass a refptr/weaktpr to |this|?
   write_task_runner_->PostTask([ this, bytes = bytes.ToString() ] {
-    ssize_t bytes_written = write(fd_, bytes.data(), bytes.size());
-
-    // This cast isn't really safe, then again it should be virtually
-    // impossible to send a large enough packet to cause an overflow (at
-    // least with the GDB Remote protocol).
-    if (bytes_written != static_cast<ssize_t>(bytes.size())) {
-      util::LogErrorWithErrno("Failed to send bytes");
-      ReportError();
-      return;
+    // Short writes can happen, so keep looping until it's all written.
+    size_t count = bytes.size();
+    const char* data = bytes.data();
+    while (count > 0) {
+      ssize_t bytes_written = write(out_fd_, data, count);
+      if (bytes_written <= 0) {
+        util::LogErrorWithErrno("Failed to send bytes");
+        ReportError();
+        return;
+      }
+      data += bytes_written;
+      count -= bytes_written;
     }
     FTL_VLOG(2) << "<- " << util::EscapeNonPrintableString(bytes);
+  });
+}
+
+void IOLoop::PostReadAfterWritesTask() {
+  write_task_runner_->PostTask([ this ] {
+    // TODO(armansito): Pass a refptr/weakptr to |this|?
+    ftl::Closure read_task = [this, &read_task] {
+      bool another = ReadTask();
+
+      if (another && !quit_called_)
+        read_task_runner_->PostTask(read_task);
+    };
+
+    read_task_runner_->PostTask(read_task);
   });
 }
 

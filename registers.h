@@ -136,8 +136,20 @@ class Registers {
   // RefreshGeneralRegisters() must be called first.
   mx_vaddr_t GetPC();
 
+  // Get the value of the SP.
+  // RefreshGeneralRegisters() must be called first.
+  mx_vaddr_t GetSP();
+
+  // Get the value of the FP.
+  // RefreshGeneralRegisters() must be called first.
+  mx_vaddr_t GetFP();
+
   // Set the h/w singlestepping register.
   virtual bool SetSingleStep(bool enable) = 0;
+
+  // Return a formatted display of |regset|.
+  // RefreshRegset() of the appropriate regset must be called first.
+  virtual std::string FormatRegset(int regset) = 0;
 
   // Returns a string containing all 0s. This is used in our implementation to
   // return register values when there is a current inferior but no current

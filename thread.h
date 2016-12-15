@@ -34,7 +34,7 @@ class Thread final {
   ~Thread();
 
   Process* process() const { return process_; }
-  mx_handle_t debug_handle() const { return debug_handle_; }
+  mx_handle_t handle() const { return debug_handle_; }
   mx_koid_t id() const { return id_; }
 
   std::string GetName() const;

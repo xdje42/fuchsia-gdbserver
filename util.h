@@ -170,5 +170,18 @@ std::string ExceptionToString(mx_excp_type_t type,
 
 bool ReadString(const Memory& m, mx_vaddr_t vaddr, char* ptr, size_t max);
 
+using Argv = std::vector<std::string>;
+
+Argv BuildArgv(const ftl::StringView& args);
+
+std::string ArgvToString(const Argv& argv);
+
+// Same as basename, except will not modify |file|.
+// This assumes there are no trailing /s. If there are then |file| is returned
+// as is.
+const char* basename(const char* s);
+
+void hexdump_ex(const void* ptr, size_t len, uint64_t disp_addr);
+
 }  // namespace util
 }  // namespace debugserver

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <atomic>
-#include <array>
 #include <thread>
 
 #include "lib/ftl/macros.h"
@@ -15,8 +14,8 @@
 
 namespace debugserver {
 
-// Maintains dedicated threads for reads and writes on a given socket file
-// descriptor and allows read and write tasks to be scheduled from a single
+// Maintains dedicated threads for reads and writes on given file
+// descriptors and allows read and write tasks to be scheduled from a single
 // origin thread.
 //
 // This class is thread-safe as long as all the public methods are accessed from
@@ -27,7 +26,7 @@ namespace debugserver {
 // fd to use with mtl::MessageLoop::AddHandler. That way we can avoid blocking
 // reads and writes while also using a single thread. Then again this works fine
 // too.
-class IOLoop final {
+class IOLoop {
  public:
   // Delegate class for receiving asynchronous events for the result of
   // read/write operations. All operations will be posted on the MessageLoop of
@@ -47,11 +46,11 @@ class IOLoop final {
   };
 
   // Does not take ownership of any of the parameters. Care should be taken to
-  // make sure that |delegate| and |fd| outlive this object.
-  IOLoop(int fd, Delegate* delegate);
+  // make sure that |delegate| and |in_fd,out_fd| outlive this object.
+  IOLoop(int in_fd, int out_fd, Delegate* delegate);
 
   // The destructor calls Quit() and thus it may block.
-  ~IOLoop();
+  virtual ~IOLoop();
 
   // Initializes the underlying threads and message loops and runs them.
   void Run();
@@ -61,14 +60,23 @@ class IOLoop final {
   // (read/write) this may block until either pending read and/or write returns.
   void Quit();
 
+  // Called while quitting to unblock any i/o task.
+  void UnblockIO();
+
+  // Posts an asynchronous task on to listen for an incoming request (e.g.,
+  // packet or command line).
+  // Subsequent read tasks are automatically posted if ReadTask returns true.
+  // Otherwise PostReadTask must be called again.
+  // Called from Run() to start the first read task.
+  void PostReadTask();
+
   // Posts an asynchronous task on the message loop to send a packet.
   void PostWriteTask(const ftl::StringView& bytes);
 
- private:
-  // Maximum number of characters in the inbound buffer.
-  constexpr static size_t kMaxBufferSize = 4096;
+  // Post a read task after all currently posted writes have completed.
+  void PostReadAfterWritesTask();
 
-  IOLoop() = default;
+  bool quit_called() { return quit_called_; }
 
   // Helper method for StartReadTask, only called from the read thread.
   // Process one read request.
@@ -78,25 +86,38 @@ class IOLoop final {
   // initiates a loop that always reads for incoming packets. Called from Run().
   void StartReadLoop();
 
+ protected:
+  int in_fd() { return in_fd_; }
+  int out_fd() { return out_fd_; }
+  Delegate* delegate() { return delegate_; }
+  ftl::RefPtr<ftl::TaskRunner>& origin_task_runner() {
+    return origin_task_runner_;
+  }
+
   // Notifies the delegate that there has been an I/O error.
   void ReportError();
   void ReportDisconnected();
+
+ private:
+  // Read and process one request.
+  // Returns true if another task should be posted to read the next request.
+  virtual bool ReadTask() = 0;
 
   // True if Quit() was called. This tells the |read_thread| to terminate its
   // loop as soon as any blocking call to read returns.
   std::atomic_bool quit_called_;
 
-  // The socket file descriptor.
-  int fd_;
+  // The file descriptors.
+  // There are separate descriptors for input and output for use by terminal
+  // related i/o loops (stdin + stdout). For socket related i/o these
+  // descriptors are the same.
+  int in_fd_, out_fd_;
 
   // The delegate that we send I/O events to.
   Delegate* delegate_;
 
   // True, if Run() has been called.
   bool is_running_;
-
-  // Buffer used for reading incoming bytes.
-  std::array<char, kMaxBufferSize> in_buffer_;
 
   // The origin task runner used to post delegate events to the thread that
   // created this object.

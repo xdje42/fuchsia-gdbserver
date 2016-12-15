@@ -138,7 +138,14 @@ dsoinfo_t* dso_get_main_exec(dsoinfo_t* dso_list) {
   return nullptr;
 }
 
-void dso_vlog_list(dsoinfo_t* dso_list) {
+void dso_print_list(const dsoinfo_t* dso_list) {
+  for (auto dso = dso_list; dso != nullptr; dso = dso->next) {
+    printf("dso: id=%s base=%p name=%s\n",
+           dso->buildid, (void*) dso->base, dso->name);
+  }
+}
+
+void dso_vlog_list(const dsoinfo_t* dso_list) {
   for (auto dso = dso_list; dso != nullptr; dso = dso->next) {
     FTL_VLOG(2) << ftl::StringPrintf("dso: id=%s base=%p name=%s", dso->buildid,
                                      (void*)dso->base, dso->name);
