@@ -205,8 +205,10 @@ void RspServer::PostNotificationTimeoutHandler() {
         // If the notification that we set this timeout for has already been
         // acknowledged by the remote, then we have nothing to do.
         // TODO: sequence numbers?
-        if (pending_notification_.get() != pending)
+        if (pending_notification_.get() != pending) {
+          FTL_VLOG(2) << "Notification timed out, but pending notification gone";
           return;
+        }
 
         FTL_LOG(WARNING) << "Notification timed out; retrying";
         PostPendingNotificationWriteTask();
@@ -216,11 +218,6 @@ void RspServer::PostNotificationTimeoutHandler() {
 }
 
 void RspServer::OnBytesRead(const ftl::StringView& bytes_read) {
-  // If this is a packet acknowledgment then ignore it and read again.
-  // TODO(armansito): Re-send previous packet if we got "-".
-  if (bytes_read == "+")
-    return;
-
   ftl::StringView packet_data;
   bool verified = util::VerifyPacket(bytes_read, &packet_data);
 

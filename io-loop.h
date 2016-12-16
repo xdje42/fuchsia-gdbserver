@@ -63,6 +63,10 @@ class IOLoop {
   // Called while quitting to unblock any i/o task.
   void UnblockIO();
 
+  // Helper method for PostReadTask.
+  // Process one read request.
+  void OnReadTask();
+
   // Posts an asynchronous task on to listen for an incoming request (e.g.,
   // packet or command line).
   // Subsequent read tasks are automatically posted if ReadTask returns true.
