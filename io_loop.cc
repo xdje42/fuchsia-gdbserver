@@ -40,6 +40,7 @@ void IOLoop::Run() {
   read_thread_ = mtl::CreateThread(&read_task_runner_, "i/o loop read task");
   write_thread_ = mtl::CreateThread(&write_task_runner_, "i/o loop write task");
 
+  // Start the read loop going.
   PostReadTask();
 }
 
@@ -111,6 +112,13 @@ void IOLoop::StartReadLoop() {
 void IOLoop::UnblockIO() {
   close(in_fd_);
   in_fd_ = -1;
+}
+
+void IOLoop::OnReadTask() {
+  bool another = ReadTask();
+
+  if (another && !quit_called_)
+    read_task_runner_->PostTask(std::bind(&IOLoop::OnReadTask, this));
 }
 
 void IOLoop::PostReadTask() {

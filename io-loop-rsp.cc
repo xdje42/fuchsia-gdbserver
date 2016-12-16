@@ -44,6 +44,10 @@ bool RspIOLoop::ReadTask() {
   // runs.
   // TODO(armansito): Pass a weakptr to |delegate_|?
   origin_task_runner()->PostTask([ bytes_read = bytes_read.ToString(), this ] {
+    // If this is an Ack/Nak don't bother the main thread.
+    // TODO(armansito): Re-send previous packet if we got "-".
+    if (bytes_read == "+")
+      return;
     delegate()->OnBytesRead(bytes_read);
   });
 
