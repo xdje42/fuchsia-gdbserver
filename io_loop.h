@@ -63,8 +63,8 @@ class IOLoop {
   // Called while quitting to unblock any i/o task.
   void UnblockIO();
 
-  // Helper method for PostReadTask.
-  // Process one read request.
+  // Helper method for PostReadTask, only called from the read thread.
+   // Process one read request.
   void OnReadTask();
 
   // Posts an asynchronous task on to listen for an incoming request (e.g.,
@@ -81,14 +81,6 @@ class IOLoop {
   void PostReadAfterWritesTask();
 
   bool quit_called() { return quit_called_; }
-
-  // Helper method for StartReadTask, only called from the read thread.
-  // Process one read request.
-  void OnReadTask();
-
-  // Posts an asynchronous task on to listen for an incoming packet. This
-  // initiates a loop that always reads for incoming packets. Called from Run().
-  void StartReadLoop();
 
  protected:
   int in_fd() { return in_fd_; }
