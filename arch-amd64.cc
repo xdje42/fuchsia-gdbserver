@@ -7,9 +7,10 @@
 #include "lib/ftl/logging.h"
 
 #include "arch-x86.h"
-#include "arch-x86-cpuid.h"
 #include "thread.h"
 #include "util.h"
+#include "x86-cpuid.h"
+#include "x86-pt.h"
 
 namespace debugserver {
 namespace arch {
@@ -89,16 +90,21 @@ int ComputeGdbSignal(const mx_exception_context_t& context) {
 
 bool IsSingleStepException(const mx_exception_context_t& context) {
   auto arch_exception = context.arch.u.x86_64.vector;
+  return arch_exception == x86::INT_DEBUG;
+}
 
-  return arch_exception == 1;
+static bool HaveProcessorTrace() {
+  x86::x86_feature_init();
+  return x86::x86_feature_test(X86_FEATURE_PT);
 }
 
 void DumpArch() {
   x86::x86_feature_debug();
-}
-
-bool HaveProcessorTrace() {
-  return false; // TODO(dje)
+  if (HaveProcessorTrace()) {
+    x86::processor_trace_features pt;
+    x86::get_processor_trace_features(&pt);
+    x86::dump_processor_trace_features(&pt);
+  }
 }
 
 }  // namespace arch
