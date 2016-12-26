@@ -13,6 +13,7 @@
 #include "lib/ftl/logging.h"
 #include "lib/ftl/strings/string_number_conversions.h"
 
+#include "arch.h"
 #include "server-mydb.h"
 #include "process.h"
 #include "readline.h"
@@ -28,9 +29,10 @@ constexpr char kUsageString[] =
     "e.g. mydb /path/to/executable\n"
     "\n"
     "Options:\n"
+    "  --dump-arch        print random facts about the architecture at startup\n"
     "  --help             show this help message\n"
-    "  --verbose[=level]  set debug verbosity level\n"
     "  --quiet[=level]    set quietness level (opposite of verbose)\n"
+    "  --verbose[=level]  set debug verbosity level\n"
     "\n"
     "--verbose=<level> : sets |min_log_level| to -level\n"
     "--quiet=<level>   : sets |min_log_level| to +level\n"
@@ -56,6 +58,10 @@ int main(int argc, char* argv[]) {
   if (cl.HasOption("help", nullptr)) {
     PrintUsageString();
     return EXIT_SUCCESS;
+  }
+
+  if (cl.HasOption("dump-arch", nullptr)) {
+    debugserver::arch::DumpArch();
   }
 
   if (!ftl::SetLogSettingsFromCommandLine(cl))

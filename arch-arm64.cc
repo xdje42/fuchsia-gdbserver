@@ -19,5 +19,9 @@ bool IsSingleStepException(const mx_exception_context_t& context) {
   return false;
 }
 
+void DumpArch() {
+  FTL_NOTIMPLEMENTED();
+}
+
 }  // namespace arch
 }  // namespace debugserver

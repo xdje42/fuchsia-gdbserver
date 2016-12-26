@@ -18,5 +18,8 @@ int ComputeGdbSignal(const mx_exception_context_t& context);
 // Returns true if |context| is a single-stepping exception.
 bool IsSingleStepException(const mx_exception_context_t& context);
 
+// Dump random bits about the architecuture.
+void DumpArch();
+
 }  // namespace arch
 }  // namespace debugserver

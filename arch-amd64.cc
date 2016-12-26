@@ -7,6 +7,7 @@
 #include "lib/ftl/logging.h"
 
 #include "arch-x86.h"
+#include "arch-x86-cpuid.h"
 #include "thread.h"
 #include "util.h"
 
@@ -90,6 +91,14 @@ bool IsSingleStepException(const mx_exception_context_t& context) {
   auto arch_exception = context.arch.u.x86_64.vector;
 
   return arch_exception == 1;
+}
+
+void DumpArch() {
+  x86::x86_feature_debug();
+}
+
+bool HaveProcessorTrace() {
+  return false; // TODO(dje)
 }
 
 }  // namespace arch
