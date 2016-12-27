@@ -4,6 +4,10 @@
 
 #include "arch.h"
 
+#include <magenta/perf.h>
+#include <magenta/syscalls.h>
+#include <stdio.h>
+
 #include "lib/ftl/logging.h"
 
 #include "arch-x86.h"
@@ -105,6 +109,74 @@ void DumpArch() {
     x86::get_processor_trace_features(&pt);
     x86::dump_processor_trace_features(&pt);
   }
+}
+
+void StartPerf() {
+  if (!HaveProcessorTrace())
+    return;
+
+  auto status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_INIT, 0, nullptr);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("init perf", status);
+    return;
+  }
+  status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_START, 0, nullptr);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("start perf", status);
+    return;
+  }
+}
+
+void StopPerf() {
+  if (!HaveProcessorTrace())
+    return;
+
+  auto status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_STOP, 0, nullptr);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("stop perf", status);
+    return;
+  }
+  size_t capture_size = 0;
+  status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_GET_SIZE, 0, &capture_size);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("get perf size", status);
+    return;
+  }
+
+  printf("PT captured %zu bytes\n", capture_size);
+  void* buf = malloc(capture_size);
+  if (buf != NULL) {
+    uint32_t actual;
+    status = mx_perf_trace_read(mx_process_self(), buf, 0, capture_size, &actual);
+    if (status != NO_ERROR) {
+      util::LogErrorWithMxStatus("read perf", status);
+    } else {
+#if 0
+      printf("PT results:\n");
+      util::hexdump_ex(buf, actual, 0);
+#else
+      FILE* f = fopen("/tmp/pt.dump", "wb");
+      if (f != NULL) {
+        size_t n = fwrite(buf, actual, 1, f);
+        if (n != 1)
+          printf("Error writing /tmp/pt.dump\n");
+        fclose(f);
+      } else {
+        printf("Unable to write PT dump to /tmp/pt.dump\n");
+      }
+#endif
+    }
+    free(buf);
+  }
+
+  status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_END, 0, nullptr);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("end perf", status);
+    return;
+  }
+}
+
+void DumpPerf() {
 }
 
 }  // namespace arch

@@ -21,5 +21,10 @@ bool IsSingleStepException(const mx_exception_context_t& context);
 // Dump random bits about the architecuture.
 void DumpArch();
 
+// Experiments with Intel PT.
+void StartPerf();
+void StopPerf();
+void DumpPerf();
+
 }  // namespace arch
 }  // namespace debugserver

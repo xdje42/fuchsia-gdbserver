@@ -32,6 +32,7 @@ constexpr char kUsageString[] =
     "  --dump-arch        print random facts about the architecture at startup\n"
     "  --help             show this help message\n"
     "  --quiet[=level]    set quietness level (opposite of verbose)\n"
+    "  --test-pt          experimental for testing Intel PT\n"
     "  --verbose[=level]  set debug verbosity level\n"
     "\n"
     "--verbose=<level> : sets |min_log_level| to -level\n"
@@ -69,6 +70,10 @@ int main(int argc, char* argv[]) {
 
   FTL_LOG(INFO) << "Starting mydb.";
 
+  if (cl.HasOption("test-pt", nullptr)) {
+    debugserver::arch::StartPerf();
+  }
+
   debugserver::MydbServer mydb;
 
   std::vector<std::string> inferior_argv(cl.positional_args().begin(),
@@ -78,6 +83,12 @@ int main(int argc, char* argv[]) {
   mydb.set_current_process(inferior);
 
   auto status = mydb.Run();
+
+  if (cl.HasOption("test-pt", nullptr)) {
+    debugserver::arch::StopPerf();
+    debugserver::arch::DumpPerf();
+  }
+
   if (!status) {
     FTL_LOG(ERROR) << "Mydb exited with error";
     return EXIT_FAILURE;
