@@ -8,7 +8,7 @@
 #include "lib/ftl/strings/string_view.h"
 
 #include "debug-info-cache.h"
-#include "exception_port.h"
+#include "exception-port.h"
 #include "io-loop-mydb.h"
 #include "mydb-command-handler.h"
 #include "process.h"

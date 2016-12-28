@@ -12,8 +12,8 @@
 #include "lib/ftl/macros.h"
 #include "lib/ftl/strings/string_view.h"
 
-#include "command_handler.h"
-#include "exception_port.h"
+#include "command-handler.h"
+#include "exception-port.h"
 #include "io-loop-rsp.h"
 #include "process.h"
 #include "server.h"
