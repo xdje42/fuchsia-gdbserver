@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 
 #include "lib/ftl/logging.h"
 
@@ -112,7 +113,8 @@ static inline bool x86_feature_test(struct x86_cpuid_bit bit)
     }
 }
 
-void x86_feature_debug();
+// TODO(dje): Switch to iostreams later.
+void x86_feature_debug(FILE* out);
 
 /* add feature bits to test here */
 #define X86_FEATURE_SSE3         X86_CPUID_BIT(0x1, 2, 0)

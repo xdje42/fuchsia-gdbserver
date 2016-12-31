@@ -10,24 +10,37 @@
 #include "lib/ftl/logging.h"
 #include "lib/ftl/strings/string_printf.h"
 
-#include "process.h"
 #include "util.h"
 
 namespace debugserver {
 
-ProcessMemory::ProcessMemory(Process* process) : process_(process) {}
+ProcessMemory::ProcessMemory(mx_handle_t handle)
+    : handle_(handle) {
+}
+
+void ProcessMemory::SetHandle(mx_handle_t handle) {
+  FTL_DCHECK(handle != MX_HANDLE_INVALID);
+  FTL_DCHECK(handle_ == MX_HANDLE_INVALID);
+  handle_ = handle;
+}
+
+void ProcessMemory::Clear() {
+  handle_ = MX_HANDLE_INVALID;
+}
 
 bool ProcessMemory::Read(uintptr_t address,
                          void* out_buffer,
                          size_t length) const {
   FTL_DCHECK(out_buffer);
 
-  mx_handle_t handle = process_->handle();
-  FTL_DCHECK(handle != MX_HANDLE_INVALID);
+  if (handle_ == MX_HANDLE_INVALID) {
+    FTL_VLOG(2) << "No process memory to read from";
+    return false;
+  }
 
   size_t bytes_read;
   mx_status_t status =
-      mx_process_read_memory(handle, address, out_buffer, length, &bytes_read);
+      mx_process_read_memory(handle_, address, out_buffer, length, &bytes_read);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus(
         ftl::StringPrintf("Failed to read memory at addr: %" PRIxPTR, address),
@@ -51,8 +64,7 @@ bool ProcessMemory::Write(uintptr_t address,
 
   // We could be trying to remove a breakpoint after the process has exited.
   // So if the process is gone just return.
-  mx_handle_t handle = process_->handle();
-  if (handle == MX_HANDLE_INVALID) {
+  if (handle_ == MX_HANDLE_INVALID) {
     FTL_VLOG(2) << "No process memory to write to";
     return false;
   }
@@ -64,7 +76,7 @@ bool ProcessMemory::Write(uintptr_t address,
 
   size_t bytes_written;
   mx_status_t status =
-      mx_process_write_memory(handle, address, data, length, &bytes_written);
+      mx_process_write_memory(handle_, address, data, length, &bytes_written);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus(
         ftl::StringPrintf("Failed to write memory at addr: %" PRIxPTR, address),

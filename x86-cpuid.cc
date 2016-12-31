@@ -138,7 +138,7 @@ const struct x86_model_info * x86_get_model(void)
     return &model_info;
 }
 
-void x86_feature_debug(void)
+void x86_feature_debug(FILE* out)
 {
     static const struct {
         struct x86_cpuid_bit bit;
@@ -181,29 +181,29 @@ void x86_feature_debug(void)
         case X86_VENDOR_INTEL: vendor_string = "Intel"; break;
         case X86_VENDOR_AMD: vendor_string = "AMD"; break;
     }
-    printf("Vendor: %s\n", vendor_string);
+    fprintf(out, "Vendor: %s\n", vendor_string);
 
     auto model = x86_get_model();
-    printf("Model:");
-    printf(" processor %u, family %u, model %u, stepping %u",
-           model->processor_type, model->family, model->model,
-           model->stepping);
-    printf(", display: family %u, model %u",
-           model->display_family, model->display_model);
-    printf("\n");
+    fprintf(out, "Model:");
+    fprintf(out, " processor %u, family %u, model %u, stepping %u",
+            model->processor_type, model->family, model->model,
+            model->stepping);
+    fprintf(out, ", display: family %u, model %u",
+            model->display_family, model->display_model);
+    fprintf(out, "\n");
 
-    printf("Features:\n");
+    fprintf(out, "Features:\n");
     size_t col = 0;
-    for (auto f : features) {
+    for (auto& f : features) {
         if (x86_feature_test(f.bit))
-            col += printf("%s ", f.name);
+            col += fprintf(out, "%s ", f.name);
         if (col >= 80) {
-            printf("\n");
+            fprintf(out, "\n");
             col = 0;
         }
     }
     if (col > 0)
-        printf("\n");
+        fprintf(out, "\n");
 }
 
 }  // namespace x86

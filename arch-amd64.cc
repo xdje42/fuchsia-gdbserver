@@ -4,6 +4,9 @@
 
 #include "arch.h"
 
+#include <cinttypes>
+#include <link.h>
+
 #include <magenta/perf.h>
 #include <magenta/syscalls.h>
 #include <stdio.h>
@@ -11,10 +14,18 @@
 #include "lib/ftl/logging.h"
 
 #include "arch-x86.h"
+#include "dso-list.h"
+#include "memory-process.h"
 #include "thread.h"
 #include "util.h"
 #include "x86-cpuid.h"
 #include "x86-pt.h"
+
+// This is a global variable that exists in the dynamic linker, and thus in
+// every processes's address space (since Fuchsia is PIE-only). It contains
+// various information provided by the dynamic linker for use by debugging
+// tools.
+extern struct r_debug* _dl_debug_addr;
 
 namespace debugserver {
 namespace arch {
@@ -102,12 +113,12 @@ static bool HaveProcessorTrace() {
   return x86::x86_feature_test(X86_FEATURE_PT);
 }
 
-void DumpArch() {
-  x86::x86_feature_debug();
+void DumpArch(FILE* out) {
+  x86::x86_feature_debug(out);
   if (HaveProcessorTrace()) {
     x86::processor_trace_features pt;
     x86::get_processor_trace_features(&pt);
-    x86::dump_processor_trace_features(&pt);
+    x86::dump_processor_trace_features(out, &pt);
   }
 }
 
@@ -145,7 +156,7 @@ void StopPerf() {
 
   printf("PT captured %zu bytes\n", capture_size);
   void* buf = malloc(capture_size);
-  if (buf != NULL) {
+  if (buf != nullptr) {
     uint32_t actual;
     status = mx_perf_trace_read(mx_process_self(), buf, 0, capture_size, &actual);
     if (status != NO_ERROR) {
@@ -156,7 +167,7 @@ void StopPerf() {
       util::hexdump_ex(buf, actual, 0);
 #else
       FILE* f = fopen("/tmp/pt.dump", "wb");
-      if (f != NULL) {
+      if (f != nullptr) {
         size_t n = fwrite(buf, actual, 1, f);
         if (n != 1)
           printf("Error writing /tmp/pt.dump\n");
@@ -176,7 +187,57 @@ void StopPerf() {
   }
 }
 
+static std::string perm_string(uint32_t flags) {
+  std::string result("---");
+  if (flags & PF_R)
+    result[0] = 'r';
+  if (flags & PF_W)
+    result[1] = 'w';
+  if (flags & PF_X)
+    result[2] = 'x';
+  return result;
+}
+
+// TODO(dje): wip wip wip
+
 void DumpPerf() {
+  FILE* f = fopen("/tmp/pt.cpuid", "w");
+  if (f != nullptr) {
+    DumpArch(f);
+    fclose(f);
+  } else {
+    fprintf(stderr, "Unable to write PT config to /tmp/pt.cpuid\n");
+  }
+
+  f = fopen("/tmp/pt.map", "w");
+  if (f != nullptr) {
+    auto r_debug = _dl_debug_addr;
+    mx_vaddr_t r_map = reinterpret_cast<mx_vaddr_t>(r_debug->r_map);
+    ProcessMemory self(mx_process_self());
+    elf::dsoinfo_t* dsos = elf::dso_fetch_list(self, r_map,
+                                               "/system/bin/mydb");
+    if (dsos != nullptr) {
+      for (const elf::dsoinfo_t* dso = dsos; dso != nullptr; dso = dso->next) {
+        for (uint32_t i = 0; i < dso->num_loadable_phdrs; ++i) {
+          const elf::phdr_type* p = &dso->loadable_phdrs[i];
+          // TODO(dje): fake dev/inode, and keep output same format as linux,
+          // for now.
+          fprintf(f, "%08" PRIxPTR "-%08" PRIxPTR " %s %08" PRIxPTR " 00:00 0 %s\n",
+                  dso->base + p->p_vaddr,
+                  dso->base + p->p_vaddr + p->p_memsz,
+                  perm_string(p->p_flags).c_str(),
+                  p->p_offset,
+                  dso->name);
+        }
+      }
+      dso_free_list(dsos);
+    } else {
+      fprintf(stderr, "Unable to obtain dso list\n");
+    }
+    fclose(f);
+  } else {
+    fprintf(stderr, "Unable to write PT map to /tmp/pt.map\n");
+  }
 }
 
 }  // namespace arch

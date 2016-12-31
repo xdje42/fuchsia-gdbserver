@@ -148,7 +148,7 @@ Process::Process(Server* server, Delegate* delegate, const util::Argv& argv)
     : server_(server),
       delegate_(delegate),
       argv_(argv),
-      memory_(this),
+      memory_(MX_HANDLE_INVALID),
       breakpoints_(this) {
   FTL_DCHECK(server_);
   FTL_DCHECK(delegate_);
@@ -227,6 +227,8 @@ bool Process::Initialize() {
         status);
     goto fail;
   }
+
+  memory_.SetHandle(debug_handle_);
 
   FTL_LOG(INFO) << "Obtained base load address: "
                 << ftl::StringPrintf("0x%" PRIxPTR, base_address_)
@@ -340,6 +342,8 @@ void Process::Clear() {
   if (debug_handle_ != MX_HANDLE_INVALID)
     mx_handle_close(debug_handle_);
   debug_handle_ = MX_HANDLE_INVALID;
+
+  memory_.Clear();
 
   id_ = MX_KOID_INVALID;
   base_address_ = 0;

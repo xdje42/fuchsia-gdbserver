@@ -78,32 +78,32 @@ void get_processor_trace_features(processor_trace_features *pt) {
     pt->bus_freq = 1. / ((float)a1 / (float)b1);
 }
 
-void dump_processor_trace_features(processor_trace_features *pt) {
-  printf("Processor trace:");
+void dump_processor_trace_features(FILE* out, processor_trace_features *pt) {
+  fprintf(out, "Processor trace:");
   if (!pt->have_pt) {
-    printf(" not supported\n");
+    fprintf(out, " not supported\n");
     return;
   }
 
-  printf("\n");
-  printf("to_pa: %d\n", pt->to_pa);
-  printf("multiple_to_pa_entries: %d\n", pt->multiple_to_pa_entries);
-  printf("single_range: %d\n", pt->single_range);
-  printf("trace_transport_output: %d\n", pt->trace_transport_output);
-  printf("payloads_are_lip: %d\n", pt->payloads_are_lip);
-  printf("cycle_accurate_mode: %d\n", pt->cycle_accurate_mode);
-  printf("filtering_stop_mtc: %d\n", pt->filtering_stop_mtc);
-  printf("cr3_match: %d\n", pt->cr3_match);
-  printf("num_addr_ranges: %u\n", pt->num_addr_ranges);
-  printf("supports_filter_ranges: %d\n", pt->supports_filter_ranges);
-  printf("supports_stop_ranges: %d\n", pt->supports_stop_ranges);
-  printf("cycle_thresh_mask: 0x%x\n", pt->cycle_thresh_mask);
-  printf("psb_freq_mask: 0x%x\n", pt->psb_freq_mask);
-  printf("mtc_freq_mask: 0x%x\n", pt->mtc_freq_mask);
-  printf("tsc_ratio_numerator: %u\n", pt->tsc_ratio_num);
-  printf("tsc_ratio demoninator: %u\n", pt->tsc_ratio_den);
+  fprintf(out, "\n");
+  fprintf(out, "to_pa: %d\n", pt->to_pa);
+  fprintf(out, "multiple_to_pa_entries: %d\n", pt->multiple_to_pa_entries);
+  fprintf(out, "single_range: %d\n", pt->single_range);
+  fprintf(out, "trace_transport_output: %d\n", pt->trace_transport_output);
+  fprintf(out, "payloads_are_lip: %d\n", pt->payloads_are_lip);
+  fprintf(out, "cycle_accurate_mode: %d\n", pt->cycle_accurate_mode);
+  fprintf(out, "filtering_stop_mtc: %d\n", pt->filtering_stop_mtc);
+  fprintf(out, "cr3_match: %d\n", pt->cr3_match);
+  fprintf(out, "num_addr_ranges: %u\n", pt->num_addr_ranges);
+  fprintf(out, "supports_filter_ranges: %d\n", pt->supports_filter_ranges);
+  fprintf(out, "supports_stop_ranges: %d\n", pt->supports_stop_ranges);
+  fprintf(out, "cycle_thresh_mask: 0x%x\n", pt->cycle_thresh_mask);
+  fprintf(out, "psb_freq_mask: 0x%x\n", pt->psb_freq_mask);
+  fprintf(out, "mtc_freq_mask: 0x%x\n", pt->mtc_freq_mask);
+  fprintf(out, "tsc_ratio_numerator: %u\n", pt->tsc_ratio_num);
+  fprintf(out, "tsc_ratio demoninator: %u\n", pt->tsc_ratio_den);
   if (pt->bus_freq != 0)
-    printf("bus_freq: %f\n", pt->bus_freq);
+    fprintf(out, "bus_freq: %f\n", pt->bus_freq);
 }
 
 }  // namespace x86

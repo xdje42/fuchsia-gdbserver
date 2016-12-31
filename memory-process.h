@@ -4,22 +4,26 @@
 
 #pragma once
 
+#include <magenta/types.h>
+
 #include "memory.h"
 
 namespace debugserver {
-
-class Process;
 
 // The API for accessing process memory.
 
 class ProcessMemory final : public util::Memory {
  public:
-  explicit ProcessMemory(Process* process);
+  explicit ProcessMemory(mx_handle_t handle);
+
   bool Read(uintptr_t address, void* out_buffer, size_t length) const override;
   bool Write(uintptr_t address, const void* data, size_t length) const override;
 
+  void SetHandle(mx_handle_t handle);
+  void Clear();
+
  private:
-  Process* process_;  // weak
+  mx_handle_t handle_;  // weak
 
   FTL_DISALLOW_COPY_AND_ASSIGN(ProcessMemory);
 };

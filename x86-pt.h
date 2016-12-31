@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 
 #include "lib/ftl/logging.h"
 
@@ -34,7 +35,8 @@ struct processor_trace_features {
 
 void get_processor_trace_features(processor_trace_features *pt);
 
-void dump_processor_trace_features(processor_trace_features *pt);
+// TODO(dje): Switch to iostreams later.
+void dump_processor_trace_features(FILE* out, processor_trace_features *pt);
 
 }  // namespace x86
 }  // namespace arch

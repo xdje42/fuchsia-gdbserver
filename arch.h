@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdio>
+
 #include <magenta/syscalls/exception.h>
 #include <magenta/types.h>
 
@@ -19,7 +21,8 @@ int ComputeGdbSignal(const mx_exception_context_t& context);
 bool IsSingleStepException(const mx_exception_context_t& context);
 
 // Dump random bits about the architecuture.
-void DumpArch();
+// TODO(dje): Switch to iostreams later.
+void DumpArch(FILE* out);
 
 // Experiments with Intel PT.
 void StartPerf();

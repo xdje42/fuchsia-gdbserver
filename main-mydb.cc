@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -62,7 +63,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (cl.HasOption("dump-arch", nullptr)) {
-    debugserver::arch::DumpArch();
+    debugserver::arch::DumpArch(stdout);
   }
 
   if (!ftl::SetLogSettingsFromCommandLine(cl))

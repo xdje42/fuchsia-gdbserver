@@ -96,7 +96,42 @@ dsoinfo_t* dso_fetch_list(const util::Memory& m,
     if (!VerifyElfHdr(&ehdr))
       break;
 
+    // TODO(dje): For now we ignore errors here, the data we do collect will
+    // still be useful.
+    auto phdrs = reinterpret_cast<phdr_type*>(malloc(ehdr.e_phnum * ehdr.e_phentsize));
+    if (phdrs) {
+      if (m.Read(dso->base + ehdr.e_phoff, phdrs,
+                 ehdr.e_phnum * ehdr.e_phentsize)) {
+        uint32_t num_loadable_phdrs = 0;
+        for (uint32_t i = 0; i < ehdr.e_phnum; ++i) {
+          if (phdrs[i].p_type == PT_LOAD)
+            ++num_loadable_phdrs;
+        }
+        auto loadable_phdrs
+          = reinterpret_cast<phdr_type*>(malloc(num_loadable_phdrs *
+                                                ehdr.e_phentsize));
+        if (loadable_phdrs) {
+          uint32_t j = 0;
+          for (uint32_t i = 0; i < ehdr.e_phnum; ++i) {
+            if (phdrs[i].p_type == PT_LOAD)
+              loadable_phdrs[j++] = phdrs[i];
+          }
+          FTL_DCHECK(j == num_loadable_phdrs);
+          dso->num_loadable_phdrs = num_loadable_phdrs;
+          dso->loadable_phdrs = loadable_phdrs;
+        } else {
+          FTL_VLOG(2) << "OOM reading phdrs";
+        }
+      } else {
+        FTL_VLOG(2) << "Error reading phdrs";
+      }
+      free(phdrs);
+    } else {
+      FTL_VLOG(2) << "OOM reading phdrs";
+    }
+
     // Ignore failures, this isn't critical.
+    // TODO(dje): Use phdrs just read in.
     ReadBuildId(m, dso->base, &ehdr, dso->buildid, sizeof(dso->buildid));
     dso->is_main_exec = is_main_exec;
     dso->entry = dso->base + ehdr.e_entry;
@@ -112,8 +147,9 @@ dsoinfo_t* dso_fetch_list(const util::Memory& m,
 }
 
 void dso_free_list(dsoinfo_t* list) {
-  while (list != NULL) {
+  while (list != nullptr) {
     dsoinfo_t* next = list->next;
+    free(list->loadable_phdrs);
     free(list->debug_file);
     free(list);
     list = next;
@@ -121,7 +157,7 @@ void dso_free_list(dsoinfo_t* list) {
 }
 
 dsoinfo_t* dso_lookup(dsoinfo_t* dso_list, mx_vaddr_t pc) {
-  for (auto dso = dso_list; dso != NULL; dso = dso->next) {
+  for (auto dso = dso_list; dso != nullptr; dso = dso->next) {
     if (pc >= dso->base)
       return dso;
   }
@@ -130,7 +166,7 @@ dsoinfo_t* dso_lookup(dsoinfo_t* dso_list, mx_vaddr_t pc) {
 }
 
 dsoinfo_t* dso_get_main_exec(dsoinfo_t* dso_list) {
-  for (auto dso = dso_list; dso != NULL; dso = dso->next) {
+  for (auto dso = dso_list; dso != nullptr; dso = dso->next) {
     if (dso->is_main_exec)
       return dso;
   }

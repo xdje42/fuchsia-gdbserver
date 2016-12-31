@@ -23,6 +23,8 @@ typedef struct dsoinfo {
   mx_vaddr_t base;
   mx_vaddr_t entry;
   mx_vaddr_t phdr;
+  phdr_type* loadable_phdrs;
+  uint32_t num_loadable_phdrs;
   uint32_t phentsize, phnum;
   char buildid[elf::kMaxBuildIdSize * 2 + 1];
   bool is_main_exec;
