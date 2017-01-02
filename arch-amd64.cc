@@ -166,7 +166,7 @@ void StopPerf() {
   for (uint32_t cpu = 0; cpu < num_cpus; ++cpu) {
     void* buf = malloc(capture_size[cpu]);
     if (buf != nullptr) {
-      status = mx_perf_read(mx_process_self(), PERF_READ_DATA_BYTES, buf,
+      status = mx_perf_read(mx_process_self(), PERF_READ_DATA_BYTES + cpu, buf,
                             0, capture_size[cpu], &actual);
       if (status != NO_ERROR) {
         util::LogErrorWithMxStatus("read perf", status);
@@ -179,9 +179,11 @@ void StopPerf() {
         sprintf(file_name, "/tmp/pt%u.dump", cpu);
         FILE* f = fopen(file_name, "wb");
         if (f != nullptr) {
-          size_t n = fwrite(buf, actual, 1, f);
-          if (n != 1)
-            printf("Error writing %s\n", file_name);
+          if (actual != 0) {
+            size_t n = fwrite(buf, actual, 1, f);
+            if (n != 1)
+              printf("Error writing %s\n", file_name);
+          }
           fclose(f);
         } else {
           printf("Unable to write PT dump to %s\n", file_name);
