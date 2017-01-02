@@ -126,12 +126,12 @@ void StartPerf() {
   if (!HaveProcessorTrace())
     return;
 
-  auto status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_INIT, 0, nullptr);
+  auto status = mx_perf_control(mx_process_self(), PERF_ACTION_ALLOC, 0, nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("init perf", status);
     return;
   }
-  status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_START, 0, nullptr);
+  status = mx_perf_control(mx_process_self(), PERF_ACTION_START, 0, nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("start perf", status);
     return;
@@ -142,45 +142,57 @@ void StopPerf() {
   if (!HaveProcessorTrace())
     return;
 
-  auto status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_STOP, 0, nullptr);
+  auto status = mx_perf_control(mx_process_self(), PERF_ACTION_STOP, 0, nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("stop perf", status);
     return;
   }
-  size_t capture_size = 0;
-  status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_GET_SIZE, 0, &capture_size);
+
+  uint32_t num_cpus = mx_num_cpus();
+  size_t capture_size[num_cpus];
+  size_t actual;
+  status = mx_perf_read(mx_process_self(), PERF_READ_DATA_SIZE, &capture_size,
+                        0, sizeof(size_t) * num_cpus, &actual);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("get perf size", status);
     return;
   }
 
-  printf("PT captured %zu bytes\n", capture_size);
-  void* buf = malloc(capture_size);
-  if (buf != nullptr) {
-    uint32_t actual;
-    status = mx_perf_trace_read(mx_process_self(), buf, 0, capture_size, &actual);
-    if (status != NO_ERROR) {
-      util::LogErrorWithMxStatus("read perf", status);
-    } else {
-#if 0
-      printf("PT results:\n");
-      util::hexdump_ex(buf, actual, 0);
-#else
-      FILE* f = fopen("/tmp/pt.dump", "wb");
-      if (f != nullptr) {
-        size_t n = fwrite(buf, actual, 1, f);
-        if (n != 1)
-          printf("Error writing /tmp/pt.dump\n");
-        fclose(f);
+  printf("PT captured:");
+  for (size_t cpu = 0; cpu < num_cpus; ++cpu)
+    printf(" %zu", capture_size[cpu]);
+  printf("\n");
+
+  for (uint32_t cpu = 0; cpu < num_cpus; ++cpu) {
+    void* buf = malloc(capture_size[cpu]);
+    if (buf != nullptr) {
+      status = mx_perf_read(mx_process_self(), PERF_READ_DATA_BYTES, buf,
+                            0, capture_size[cpu], &actual);
+      if (status != NO_ERROR) {
+        util::LogErrorWithMxStatus("read perf", status);
       } else {
-        printf("Unable to write PT dump to /tmp/pt.dump\n");
-      }
+#if 0
+        printf("PT results:\n");
+        util::hexdump_ex(buf, actual, 0);
+#else
+        char file_name[100];
+        sprintf(file_name, "/tmp/pt%u.dump", cpu);
+        FILE* f = fopen(file_name, "wb");
+        if (f != nullptr) {
+          size_t n = fwrite(buf, actual, 1, f);
+          if (n != 1)
+            printf("Error writing %s\n", file_name);
+          fclose(f);
+        } else {
+          printf("Unable to write PT dump to %s\n", file_name);
+        }
 #endif
+      }
+      free(buf);
     }
-    free(buf);
   }
 
-  status = mx_perf_trace_control(mx_process_self(), PERF_ACTION_END, 0, nullptr);
+  status = mx_perf_control(mx_process_self(), PERF_ACTION_FREE, 0, nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("end perf", status);
     return;
