@@ -7,7 +7,7 @@
 #include <cinttypes>
 #include <link.h>
 
-#include <magenta/perf.h>
+#include <magenta/mtrace.h>
 #include <magenta/syscalls.h>
 #include <stdio.h>
 
@@ -126,12 +126,14 @@ void StartPerf() {
   if (!HaveProcessorTrace())
     return;
 
-  auto status = mx_perf_control(mx_process_self(), PERF_ACTION_ALLOC, 0, nullptr);
+  auto status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_ALLOC, 0,
+                                  nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("init perf", status);
     return;
   }
-  status = mx_perf_control(mx_process_self(), PERF_ACTION_START, 0, nullptr);
+  status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_START, 0,
+                             nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("start perf", status);
     return;
@@ -142,7 +144,8 @@ void StopPerf() {
   if (!HaveProcessorTrace())
     return;
 
-  auto status = mx_perf_control(mx_process_self(), PERF_ACTION_STOP, 0, nullptr);
+  auto status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_STOP, 0,
+                                  nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("stop perf", status);
     return;
@@ -151,8 +154,9 @@ void StopPerf() {
   uint32_t num_cpus = mx_num_cpus();
   size_t capture_size[num_cpus];
   size_t actual;
-  status = mx_perf_read(mx_process_self(), PERF_READ_DATA_SIZE, &capture_size,
-                        0, sizeof(size_t) * num_cpus, &actual);
+  status = mx_mtrace_read(mx_process_self(), MTRACE_READ_DATA_SIZE,
+                          &capture_size, 0, sizeof(size_t) * num_cpus,
+                          &actual);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("get perf size", status);
     return;
@@ -166,8 +170,8 @@ void StopPerf() {
   for (uint32_t cpu = 0; cpu < num_cpus; ++cpu) {
     void* buf = malloc(capture_size[cpu]);
     if (buf != nullptr) {
-      status = mx_perf_read(mx_process_self(), PERF_READ_DATA_BYTES + cpu, buf,
-                            0, capture_size[cpu], &actual);
+      status = mx_mtrace_read(mx_process_self(), MTRACE_READ_DATA_BYTES + cpu,
+                              buf, 0, capture_size[cpu], &actual);
       if (status != NO_ERROR) {
         util::LogErrorWithMxStatus("read perf", status);
       } else {
@@ -194,7 +198,8 @@ void StopPerf() {
     }
   }
 
-  status = mx_perf_control(mx_process_self(), PERF_ACTION_FREE, 0, nullptr);
+  status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_FREE, 0,
+                             nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("end perf", status);
     return;
