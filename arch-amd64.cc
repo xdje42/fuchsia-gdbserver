@@ -5,11 +5,13 @@
 #include "arch.h"
 
 #include <cinttypes>
+#include <fcntl.h>
 #include <link.h>
-
-#include <magenta/mtrace.h>
-#include <magenta/syscalls.h>
 #include <stdio.h>
+#include <unistd.h>
+
+#include <magenta/device/intel-pt.h>
+#include <magenta/syscalls.h>
 
 #include "lib/ftl/logging.h"
 
@@ -29,6 +31,8 @@ extern struct r_debug* _dl_debug_addr;
 
 namespace debugserver {
 namespace arch {
+
+static int ipt_fd = -1;
 
 int ComputeGdbSignal(const mx_exception_context_t& context) {
   int sigval;
@@ -126,16 +130,18 @@ void StartPerf() {
   if (!HaveProcessorTrace())
     return;
 
-  auto status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_ALLOC, 0,
-                                  nullptr);
-  if (status != NO_ERROR) {
-    util::LogErrorWithMxStatus("init perf", status);
+  ipt_fd = open("/dev/misc/intel-pt", O_RDONLY);
+  if (ipt_fd < 0)
+    return;
+
+  auto ssize = ioctl_ipt_alloc(ipt_fd);
+  if (ssize != 0) {
+    util::LogErrorWithMxStatus("init perf", ssize);
     return;
   }
-  status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_START, 0,
-                             nullptr);
-  if (status != NO_ERROR) {
-    util::LogErrorWithMxStatus("start perf", status);
+  ssize = ioctl_ipt_start(ipt_fd);
+  if (ssize != 0) {
+    util::LogErrorWithMxStatus("start perf", ssize);
     return;
   }
 }
@@ -143,67 +149,30 @@ void StartPerf() {
 void StopPerf() {
   if (!HaveProcessorTrace())
     return;
+  if (ipt_fd < 0)
+    return;
 
-  auto status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_STOP, 0,
-                                  nullptr);
-  if (status != NO_ERROR) {
-    util::LogErrorWithMxStatus("stop perf", status);
+  auto ssize = ioctl_ipt_stop(ipt_fd);
+  if (ssize != 0) {
+    util::LogErrorWithMxStatus("stop perf", ssize);
     return;
   }
 
-  uint32_t num_cpus = mx_num_cpus();
-  size_t capture_size[num_cpus];
-  size_t actual;
-  status = mx_mtrace_read(mx_process_self(), MTRACE_READ_DATA_SIZE,
-                          &capture_size, 0, sizeof(size_t) * num_cpus,
-                          &actual);
-  if (status != NO_ERROR) {
-    util::LogErrorWithMxStatus("get perf size", status);
+  static const char output_file[] = "/tmp/ptout";
+  ssize = ioctl_ipt_write_file(ipt_fd, output_file, strlen(output_file));
+  if (ssize != 0) {
+    util::LogErrorWithMxStatus("stop perf", ssize);
     return;
   }
 
-  printf("PT captured:");
-  for (size_t cpu = 0; cpu < num_cpus; ++cpu)
-    printf(" %zu", capture_size[cpu]);
-  printf("\n");
-
-  for (uint32_t cpu = 0; cpu < num_cpus; ++cpu) {
-    void* buf = malloc(capture_size[cpu]);
-    if (buf != nullptr) {
-      status = mx_mtrace_read(mx_process_self(), MTRACE_READ_DATA_BYTES + cpu,
-                              buf, 0, capture_size[cpu], &actual);
-      if (status != NO_ERROR) {
-        util::LogErrorWithMxStatus("read perf", status);
-      } else {
-#if 0
-        printf("PT results:\n");
-        util::hexdump_ex(buf, actual, 0);
-#else
-        char file_name[100];
-        sprintf(file_name, "/tmp/pt%u.dump", cpu);
-        FILE* f = fopen(file_name, "wb");
-        if (f != nullptr) {
-          if (actual != 0) {
-            size_t n = fwrite(buf, actual, 1, f);
-            if (n != 1)
-              printf("Error writing %s\n", file_name);
-          }
-          fclose(f);
-        } else {
-          printf("Unable to write PT dump to %s\n", file_name);
-        }
-#endif
-      }
-      free(buf);
-    }
-  }
-
-  status = mx_mtrace_control(mx_process_self(), MTRACE_ACTION_FREE, 0,
-                             nullptr);
-  if (status != NO_ERROR) {
-    util::LogErrorWithMxStatus("end perf", status);
+  ssize = ioctl_ipt_free(ipt_fd);
+  if (ssize != 0) {
+    util::LogErrorWithMxStatus("end perf", ssize);
     return;
   }
+
+  close(ipt_fd);
+  ipt_fd = -1;
 }
 
 static std::string perm_string(uint32_t flags) {
