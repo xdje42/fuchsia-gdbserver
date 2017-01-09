@@ -15,6 +15,7 @@ namespace util {
 
 const char* basename(const char* s) {
   // This implementation is copied from musl's basename.c.
+  // It is different because it will not modify its argument.
   size_t i;
   if (!s || !*s)
     return ".";

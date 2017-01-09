@@ -28,9 +28,56 @@
 #include "util.h"
 #include "x86-pt.h"
 
-static int ktrace_fd = -1;
-static mx_handle_t ktrace_handle = MX_HANDLE_INVALID;
-static int ipt_fd = -1;
+static constexpr char ipt_device_path[] = "/dev/misc/intel-pt";
+static constexpr char ktrace_device_path[] = "/dev/misc/ktrace";
+
+static constexpr char pt_output_path_prefix[] = "/tmp/ptout";
+static constexpr char ktrace_output_path[] = "/tmp/ptout.ktrace";
+
+static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
+                        mx_handle_t* out_ktrace_handle) {
+  int ipt_fd = -1;
+  int ktrace_fd = -1;
+  mx_handle_t ktrace_handle = MX_HANDLE_INVALID;
+
+  if (out_ipt_fd) {
+    ipt_fd = open(ipt_device_path, O_RDONLY);
+    if (ipt_fd < 0) {
+      util::LogErrorWithErrno("open intel-pt");
+      return false;
+    }
+  }
+
+  if (out_ktrace_fd || out_ktrace_handle) {
+    ktrace_fd = open(ktrace_device_path, O_RDONLY);
+    if (ktrace_fd < 0) {
+      util::LogErrorWithErrno("open ktrace");
+      close(ipt_fd);
+      return false;
+    }
+  }
+
+  if (out_ktrace_handle) {
+    ssize_t ssize = ioctl_ktrace_get_handle(ktrace_fd, &ktrace_handle);
+    if (ssize != sizeof(ktrace_handle)) {
+      util::LogErrorWithErrno("get ktrace handle");
+      close(ipt_fd);
+      close(ktrace_fd);
+      return false;
+    }
+  }
+
+  if (out_ipt_fd)
+    *out_ipt_fd = ipt_fd;
+  if (out_ktrace_fd)
+    *out_ktrace_fd = ktrace_fd;
+  else if (ktrace_fd != -1)
+    close(ktrace_fd);
+  if (out_ktrace_handle)
+    *out_ktrace_handle = ktrace_handle;
+
+  return true;
+}
 
 static void DumpArch(FILE* out) {
   if (x86::HaveProcessorTrace()) {
@@ -40,131 +87,139 @@ static void DumpArch(FILE* out) {
 }
 
 static void StartPerf() {
+  FTL_LOG(INFO) << "StartPerf called";
+
+  int ipt_fd;
+  mx_handle_t ktrace_handle;
   ssize_t ssize;
   mx_status_t status;
 
-  if (!x86::HaveProcessorTrace())
+  if (!x86::HaveProcessorTrace()) {
+    FTL_LOG(INFO) << "PT not supported";
+    return;
+  }
+
+  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
     return;
 
-  ktrace_fd = open("/dev/misc/ktrace", O_RDONLY);
-  if (ktrace_fd < 0)
-    return;
-  ssize = ioctl_ktrace_get_handle(ktrace_fd, &ktrace_handle);
-  if (ssize != sizeof(ktrace_handle)) {
-    util::LogErrorWithErrno("get ktrace handle");
-    goto Fail;
-  }
   status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("ktrace stop", status);
-    goto FailResumeKtrace;
+    goto Fail;
   }
   status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_REWIND, 0, nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("ktrace rewind", status);
-    goto FailResumeKtrace;
+    goto Fail;
   }
+  // For now just include task info in the ktrace - we need it, and we don't
+  // want to risk the ktrace buffer filling without it.
   status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START,
                              KTRACE_GRP_TASKS, nullptr);
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("ktrace start", status);
-    goto FailResumeKtrace;
+    goto Fail;
   }
 
-  ipt_fd = open("/dev/misc/intel-pt", O_RDONLY);
-  if (ipt_fd < 0) {
-    goto FailResumeKtrace;
-  }
   ssize = ioctl_ipt_alloc(ipt_fd);
   if (ssize != 0) {
     util::LogErrorWithMxStatus("init perf", ssize);
-    goto FailResumeKtrace;
+    goto Fail;
   }
   ssize = ioctl_ipt_start(ipt_fd);
   if (ssize != 0) {
     util::LogErrorWithMxStatus("start perf", ssize);
-    goto FailResumeKtrace;
+    ioctl_ipt_free(ipt_fd);
+    goto Fail;
   }
 
+  close(ipt_fd);
+  mx_handle_close(ktrace_handle);
   return;
 
- FailResumeKtrace:
+ Fail:
+
   // TODO(dje): Resume original ktracing.
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
-  // fall through
 
- Fail:
   mx_handle_close(ktrace_handle);
-  ktrace_handle = MX_HANDLE_INVALID;
-  close(ktrace_fd);
-  ktrace_fd = -1;
   close(ipt_fd);
-  ipt_fd = -1;
 }
 
 static void StopPerf() {
-  if (!x86::HaveProcessorTrace())
+  FTL_LOG(INFO) << "StopPerf called";
+
+  int ipt_fd;
+  mx_handle_t ktrace_handle;
+  ssize_t ssize;
+  mx_status_t status;
+
+  if (!x86::HaveProcessorTrace()) {
+    FTL_LOG(INFO) << "PT not supported";
     return;
-  if (ipt_fd < 0)
+  }
+
+  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
     return;
 
-  auto ssize = ioctl_ipt_stop(ipt_fd);
+  ssize = ioctl_ipt_stop(ipt_fd);
   if (ssize != 0) {
+    // TODO(dje): This is really bad, this shouldn't fail.
     util::LogErrorWithMxStatus("stop perf", ssize);
-    return;
   }
 
-  static const char output_file[] = "/tmp/ptout";
-  ssize = ioctl_ipt_write_file(ipt_fd, output_file, strlen(output_file));
-  if (ssize != 0) {
-    util::LogErrorWithMxStatus("stop perf", ssize);
-    return;
-  }
-
-  ssize = ioctl_ipt_free(ipt_fd);
-  if (ssize != 0) {
-    util::LogErrorWithMxStatus("end perf", ssize);
-    return;
-  }
-
-  auto status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP,
-                                  0, nullptr);
-  if (status == NO_ERROR) {
-    // Save the trace, before we restore it to its original setting.
-    static const char path[] = "/tmp/ptout.ktrace";
-    int dest_fd = open(path, O_CREAT | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
-    if (dest_fd >= 0) {
-      ssize_t count;
-      char buf[1024];
-      while ((count = read(ktrace_fd, buf, sizeof(buf))) != 0) {
-        if (write(dest_fd, buf, count) != count) {
-          FTL_LOG(ERROR) << "error writing " << path;
-        }
-      }
-      close(dest_fd);
-    } else {
-      util::LogErrorWithErrno(ftl::StringPrintf("unable to create %s", path));
-    }
-  } else {
+  status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
+  if (status != NO_ERROR) {
+    // TODO(dje): This shouldn't fail either, should it?
     util::LogErrorWithMxStatus("stop ktrace", status);
   }
 
   close(ipt_fd);
-  ipt_fd = -1;
-  if (ktrace_handle != MX_HANDLE_INVALID) {
-    // TODO(dje): Resume original ktracing.
-    mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
-    mx_ktrace_control(ktrace_handle, KTRACE_ACTION_REWIND, 0, nullptr);
-    mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
-    mx_handle_close(ktrace_handle);
-    ktrace_handle = MX_HANDLE_INVALID;
-  }
-  close(ktrace_fd);
-  ktrace_fd = -1;
+  mx_handle_close(ktrace_handle);
 }
 
+// Write all output files.
+// This assumes tracing has already been stopped.
+
 static void DumpPerf() {
+  FTL_LOG(INFO) << "DumpPerf called";
+
+  int ipt_fd, ktrace_fd;
+  ssize_t ssize;
+
+  if (!x86::HaveProcessorTrace()) {
+    FTL_LOG(INFO) << "PT not supported";
+    return;
+  }
+
+  if (!OpenDevices(&ipt_fd, &ktrace_fd, nullptr))
+    return;
+
+  ssize = ioctl_ipt_write_file(ipt_fd, pt_output_path_prefix,
+                               strlen(pt_output_path_prefix));
+  if (ssize != 0) {
+    util::LogErrorWithMxStatus("stop perf", ssize);
+  }
+  close(ipt_fd);
+
+  int dest_fd = open(ktrace_output_path, O_CREAT | O_TRUNC | O_RDWR,
+                     S_IRUSR | S_IWUSR);
+  if (dest_fd >= 0) {
+    ssize_t count;
+    char buf[1024];
+    while ((count = read(ktrace_fd, buf, sizeof(buf))) != 0) {
+      if (write(dest_fd, buf, count) != count) {
+        FTL_LOG(ERROR) << "error writing " << ktrace_output_path;
+      }
+    }
+    close(dest_fd);
+  } else {
+    util::LogErrorWithErrno(ftl::StringPrintf("unable to create %s",
+                                              ktrace_output_path));
+  }
+  close(ktrace_fd);
+
   FILE* f = fopen("/tmp/ptout.cpuid", "w");
   if (f != nullptr) {
     DumpArch(f);
@@ -174,6 +229,40 @@ static void DumpPerf() {
   }
 }
 
+// Reset perf collection to its original state.
+// This means restoring ktrace to its original state, and freeing all PT
+// resources.
+// This assumes tracing has already been stopped.
+
+static void ResetPerf() {
+  FTL_LOG(INFO) << "ResetPerf called";
+
+  int ipt_fd;
+  mx_handle_t ktrace_handle;
+  ssize_t ssize;
+
+  if (!x86::HaveProcessorTrace()) {
+    FTL_LOG(INFO) << "PT not supported";
+    return;
+  }
+
+  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
+    return;
+
+  ssize = ioctl_ipt_free(ipt_fd);
+  if (ssize != 0) {
+    util::LogErrorWithMxStatus("end perf", ssize);
+  }
+
+  close(ipt_fd);
+ 
+  // TODO(dje): Resume original ktracing.
+  mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
+  mx_ktrace_control(ktrace_handle, KTRACE_ACTION_REWIND, 0, nullptr);
+  mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
+  mx_handle_close(ktrace_handle);
+}
+
 constexpr char kUsageString[] =
     "Usage: run-with-pt [options] program [args...]\n"
     "\n"
@@ -181,6 +270,7 @@ constexpr char kUsageString[] =
     "\n"
     "Options:\n"
     "  --dump-arch        print random facts about the architecture at startup\n"
+    "  --stop-pt          turn off PT and exit\n"
     "  --help             show this help message\n"
     "  --quiet[=level]    set quietness level (opposite of verbose)\n"
     "  --verbose[=level]  set debug verbosity level\n"
@@ -211,6 +301,12 @@ int main(int argc, char* argv[]) {
   if (!ftl::SetLogSettingsFromCommandLine(cl))
     return EXIT_FAILURE;
 
+  if (cl.HasOption("stop-pt", nullptr)) {
+    StopPerf();
+    ResetPerf();
+    return EXIT_SUCCESS;
+  }
+
   if (cl.HasOption("dump-arch", nullptr)) {
     DumpArch(stdout);
   }
@@ -228,36 +324,46 @@ int main(int argc, char* argv[]) {
     c_args[i] = inferior_argv[i].c_str();
   const char* name = util::basename(c_args[0]);
 
+  FTL_LOG(INFO) << "Starting program: " << inferior_argv[0];
+
+  int rc = EXIT_SUCCESS;
+
   StartPerf();
+
+  // N.B. It's important that the PT device be closed at this point as we
+  // don't want the inferior to inherit the open descriptor: the device can
+  // only be opened once at a time.
 
   mx_handle_t inferior =
     launchpad_launch_mxio(name, inferior_argv.size(), c_args);
-  if (inferior < 0) {
-    util::LogErrorWithMxStatus("error starting process", inferior);
-    return EXIT_FAILURE;
-  }
+  if (inferior > 0) {
+    mx_signals_t signals = MX_SIGNAL_SIGNALED;
+    mx_signals_t pending;
+    int64_t timeout = MX_TIME_INFINITE;
+    mx_status_t status = mx_handle_wait_one(inferior, signals, timeout,
+                                            &pending);
+    if (status != NO_ERROR) {
+      util::LogErrorWithMxStatus("mx_handle_wait_one failed", status);
+    }
 
-  mx_signals_t signals = MX_SIGNAL_SIGNALED;
-  mx_signals_t pending;
-  int64_t timeout = MX_TIME_INFINITE;
-  mx_status_t status = mx_handle_wait_one(inferior, signals, timeout,
-                                          &pending);
-  if (status != NO_ERROR) {
-    util::LogErrorWithMxStatus("mx_handle_wait_one failed", status);
-  }
+    mx_info_process_t info;
+    if ((status = mx_object_get_info(inferior, MX_INFO_PROCESS, &info,
+                                     sizeof(info), NULL, NULL)) == NO_ERROR) {
+      printf("Process exited with code %d\n", info.return_code);
+    } else {
+      util::LogErrorWithMxStatus("mx_object_get_info failed", status);
+    }
 
-  mx_info_process_t info;
-  if ((status = mx_object_get_info(inferior, MX_INFO_PROCESS, &info,
-                                   sizeof(info), NULL, NULL)) == NO_ERROR) {
-    printf("Process exited with code %d\n", info.return_code);
+    mx_handle_close(inferior);
   } else {
-    util::LogErrorWithMxStatus("mx_object_get_info failed", status);
+    util::LogErrorWithMxStatus("error starting process", inferior);
+    rc = EXIT_FAILURE;
   }
-
-  mx_handle_close(inferior);
 
   StopPerf();
-  DumpPerf();
+  if (rc == EXIT_SUCCESS)
+    DumpPerf();
+  ResetPerf();
 
-  return EXIT_SUCCESS;
+  return rc;
 }
