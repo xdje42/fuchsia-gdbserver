@@ -1,4 +1,4 @@
 ktrace-reader
 sptdecode
-/out
+/*.o
 /save.*
