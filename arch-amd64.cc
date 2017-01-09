@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include <magenta/device/intel-pt.h>
+#include <magenta/device/ktrace.h>
+#include <magenta/ktrace.h>
 #include <magenta/syscalls.h>
 
 #include "lib/ftl/logging.h"
@@ -33,6 +35,8 @@ namespace debugserver {
 namespace arch {
 
 static int ipt_fd = -1;
+static int ktrace_fd = -1;
+static mx_handle_t ktrace_handle = MX_HANDLE_INVALID;
 
 int ComputeGdbSignal(const mx_exception_context_t& context) {
   int sigval;
@@ -127,23 +131,67 @@ void DumpArch(FILE* out) {
 }
 
 void StartPerf() {
+  ssize_t ssize;
+  mx_status_t status;
+
   if (!HaveProcessorTrace())
     return;
 
-  ipt_fd = open("/dev/misc/intel-pt", O_RDONLY);
-  if (ipt_fd < 0)
+  ktrace_fd = open("/dev/misc/ktrace", O_RDONLY);
+  if (ktrace_fd < 0)
     return;
+  ssize = ioctl_ktrace_get_handle(ktrace_fd, &ktrace_handle);
+  if (ssize != sizeof(ktrace_handle)) {
+    util::LogErrorWithErrno("get ktrace handle");
+    goto Fail;
+  }
+  status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("ktrace stop", status);
+    goto FailResumeKtrace;
+  }
+  status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_REWIND, 0, nullptr);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("ktrace rewind", status);
+    goto FailResumeKtrace;
+  }
+  status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START,
+                             KTRACE_GRP_TASKS, nullptr);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("ktrace start", status);
+    goto FailResumeKtrace;
+  }
 
-  auto ssize = ioctl_ipt_alloc(ipt_fd);
+  ipt_fd = open("/dev/misc/intel-pt", O_RDONLY);
+  if (ipt_fd < 0) {
+    goto FailResumeKtrace;
+  }
+  ssize = ioctl_ipt_alloc(ipt_fd);
   if (ssize != 0) {
     util::LogErrorWithMxStatus("init perf", ssize);
-    return;
+    goto FailResumeKtrace;
   }
   ssize = ioctl_ipt_start(ipt_fd);
   if (ssize != 0) {
     util::LogErrorWithMxStatus("start perf", ssize);
-    return;
+    goto FailResumeKtrace;
   }
+
+  return;
+
+ FailResumeKtrace:
+  // TODO(dje): Resume original ktracing.
+  mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
+  mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
+  // fall through
+
+ Fail:
+  mx_handle_close(ktrace_handle);
+  ktrace_handle = MX_HANDLE_INVALID;
+  close(ktrace_fd);
+  ktrace_fd = -1;
+  close(ipt_fd);
+  ipt_fd = -1;
 }
 
 void StopPerf() {
@@ -171,8 +219,40 @@ void StopPerf() {
     return;
   }
 
+  auto status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP,
+                                  0, nullptr);
+  if (status == NO_ERROR) {
+    // Save the trace, before we restore it to its original setting.
+    static const char path[] = "/tmp/ptout.ktrace";
+    int dest_fd = open(path, O_CREAT | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
+    if (dest_fd >= 0) {
+      ssize_t count;
+      char buf[1024];
+      while ((count = read(ktrace_fd, buf, sizeof(buf))) != 0) {
+        if (write(dest_fd, buf, count) != count) {
+          fprintf(stderr, "error writing %s\n", path);
+        }
+      }
+      close(dest_fd);
+    } else {
+      fprintf(stderr, "Unable to create %s: %s\n", path, strerror(errno));
+    }
+  } else {
+    util::LogErrorWithMxStatus("stop ktrace", status);
+  }
+
   close(ipt_fd);
   ipt_fd = -1;
+  if (ktrace_handle != MX_HANDLE_INVALID) {
+    // TODO(dje): Resume original ktracing.
+    mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
+    mx_ktrace_control(ktrace_handle, KTRACE_ACTION_REWIND, 0, nullptr);
+    mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
+    mx_handle_close(ktrace_handle);
+    ktrace_handle = MX_HANDLE_INVALID;
+  }
+  close(ktrace_fd);
+  ktrace_fd = -1;
 }
 
 static std::string perm_string(uint32_t flags) {
@@ -189,7 +269,7 @@ static std::string perm_string(uint32_t flags) {
 // TODO(dje): wip wip wip
 
 void DumpPerf() {
-  FILE* f = fopen("/tmp/pt.cpuid", "w");
+  FILE* f = fopen("/tmp/ptout.cpuid", "w");
   if (f != nullptr) {
     DumpArch(f);
     fclose(f);
@@ -197,7 +277,7 @@ void DumpPerf() {
     fprintf(stderr, "Unable to write PT config to /tmp/pt.cpuid\n");
   }
 
-  f = fopen("/tmp/pt.map", "w");
+  f = fopen("/tmp/ptout.map", "w");
   if (f != nullptr) {
     auto r_debug = _dl_debug_addr;
     mx_vaddr_t r_map = reinterpret_cast<mx_vaddr_t>(r_debug->r_map);
