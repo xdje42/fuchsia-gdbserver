@@ -154,3 +154,9 @@ executable("gdbserver-unittests") {
     "magenta",
   ]
 }
+
+group("run-with-pt") {
+  deps = [
+    "intel-pt:run-with-pt"
+  ]
+}

@@ -1,0 +1,25 @@
+# Copyright 2016 The Fuchsia Authors. All rights reserved.  Use of
+# this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+executable("run-with-pt") {
+  output_name = "run-with-pt"
+
+  sources = [
+    "run-with-pt.cc",
+    "util.cc",
+    "util.h",
+    "x86-pt.cc",
+    "x86-pt.h",
+  ]
+
+  deps = [
+    "//lib/ftl",
+    "//lib/mtl",
+  ]
+
+  libs = [
+    "launchpad",
+    "magenta",
+  ]
+}
