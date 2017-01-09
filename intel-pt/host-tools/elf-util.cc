@@ -30,16 +30,20 @@
 #include <gelf.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <intel-pt.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
 
-#include "elf-util.h"
+#include <intel-pt.h>
+
+#include "lib/ftl/logging.h"
+
+#include "state.h"
 #include "symtab.h"
 #include "util.h"
 
-void read_symtab(Elf *elf, uint64_t cr3, uint64_t base, uint64_t offset, char *fn)
+static void read_symtab(Elf *elf, uint64_t cr3, uint64_t base, uint64_t offset,
+                        const char *fn)
 {
   Elf_Scn *section = NULL;
 
@@ -50,7 +54,7 @@ void read_symtab(Elf *elf, uint64_t cr3, uint64_t base, uint64_t offset, char *f
     if (sh->sh_type == SHT_SYMTAB || sh->sh_type == SHT_DYNSYM) {
       Elf_Data *data = elf_getdata(section, NULL);
       GElf_Sym *sym, symbol;
-      int j;
+      unsigned int j;
 
       unsigned numsym = sh->sh_size / sh->sh_entsize;
       // XXX search for debug info
@@ -75,7 +79,7 @@ static void find_base_len_fileoff(Elf *elf, uint64_t *base, uint64_t* len,
 				  uint64_t* fileoff)
 {
   size_t numphdr;
-  int i;
+  unsigned i;
 
   elf_getphdrnum(elf, &numphdr);
   for (i = 0; i < numphdr; i++) {
@@ -100,7 +104,7 @@ static void find_offset(Elf *elf, uint64_t base, uint64_t *offset)
 {
   size_t numphdr;
   uint64_t minaddr = UINT64_MAX;
-  int i;
+  unsigned i;
 
   if (!base) {
     *offset = 0;
@@ -124,11 +128,12 @@ static void find_offset(Elf *elf, uint64_t base, uint64_t *offset)
   *offset = base - minaddr;
 }
 
-void add_progbits(Elf *elf, struct pt_image *image, char *fn, uint64_t base,
-                  uint64_t cr3, uint64_t offset, uint64_t file_off, uint64_t map_len)
+static void add_progbits(Elf *elf, struct pt_image *image, char *fn,
+                         uint64_t base, uint64_t cr3, uint64_t offset,
+                         uint64_t file_off, uint64_t map_len)
 {
   size_t numphdr;
-  int i;
+  unsigned i;
 
   elf_getphdrnum(elf, &numphdr);
   for (i = 0; i < numphdr; i++) {
@@ -171,7 +176,7 @@ void add_progbits(Elf *elf, struct pt_image *image, char *fn, uint64_t base,
   }
 }
 
-static Elf *elf_open(char *fn, int *fd)
+static Elf *elf_open(const char *fn, int *fd)
 {
   *fd = open(fn, O_RDONLY);
   if (*fd < 0) {
@@ -193,22 +198,24 @@ static void elf_close(Elf *elf, int fd)
   close(fd);
 }
 
-int read_elf(char *fn, struct pt_image *image, uint64_t base, uint64_t cr3,
-	     uint64_t file_off, uint64_t map_len)
-{
+static int read_elf(const char *file, struct pt_image *image,
+                    uint64_t base, uint64_t cr3,
+                    uint64_t file_off, uint64_t map_len) {
   elf_version(EV_CURRENT);
 
   /* XXX add cache to read each file only once */
 
-  char *p = strchr(fn, ':');
+  char* pfile = xstrdup(file);
+  char* p = strchr(pfile, ':');
   if (p) {
     *p = 0;
     p++;
-  } else
-    p = fn;
+  } else {
+    p = pfile;
+  }
 
   int fd;
-  Elf *elf = elf_open(fn, &fd);
+  Elf *elf = elf_open(pfile, &fd);
   if (elf == NULL)
     return -1;
   bool pic = false;
@@ -222,7 +229,7 @@ int read_elf(char *fn, struct pt_image *image, uint64_t base, uint64_t cr3,
   uint64_t offset = 0;
   if (pic)
     find_offset(elf, base, &offset);
-  read_symtab(elf, cr3, base, offset, fn);
+  read_symtab(elf, cr3, base, offset, pfile);
   if (p) {
     elf_close(elf, fd);
     elf = elf_open(p, &fd);
@@ -236,21 +243,22 @@ int read_elf(char *fn, struct pt_image *image, uint64_t base, uint64_t cr3,
 
 // TODO(dje): cr3 should be an argument, but this is all wip wip wip
 
-int read_static_elf(char *fn, struct pt_image *image)
-{
+static int read_static_elf(const char *file, pt_image* image) {
   elf_version(EV_CURRENT);
 
   /* XXX add cache to read each file only once */
 
-  char *p = strchr(fn, ':');
+  char* pfile = xstrdup(file);
+  char *p = strchr(pfile, ':');
   if (p) {
     *p = 0;
     p++;
-  } else
-    p = fn;
+  } else {
+    p = pfile;
+  }
 
   int fd;
-  Elf *elf = elf_open(fn, &fd);
+  Elf *elf = elf_open(pfile, &fd);
   if (elf == NULL)
     return -1;
 
@@ -262,16 +270,40 @@ int read_static_elf(char *fn, struct pt_image *image)
   uint64_t base = 0, len = 0;
   uint64_t offset = 0, file_off = 0;
   find_base_len_fileoff(elf, &base, &len, &file_off);
-  read_symtab(elf, pt_asid_no_cr3, base, offset, fn);
+  read_symtab(elf, pt_asid_no_cr3, base, offset, pfile);
 
   if (p) {
     elf_close(elf, fd);
     elf = elf_open(p, &fd);
     if (!elf)
-      return -1;
+      return false;
   }
   add_progbits(elf, image, p, base, pt_asid_no_cr3, offset, file_off, len);
 
   elf_close(elf, fd);
-  return 0;
+  return true;
+}
+
+bool IptDecoderState::ReadElf(const char *file) {
+  FTL_DCHECK(image_);
+
+  if (read_elf(file, image_, 0, 0, 0, 0) < 0) {
+    fprintf(stderr, "Cannot load elf file %s: %s\n",
+            file, strerror(errno));
+    return false;
+  }
+
+  return true;
+}
+
+bool IptDecoderState::ReadStaticElf(const char *file) {
+  FTL_DCHECK(image_);
+
+  if (read_static_elf(file, image_) < 0) {
+    fprintf(stderr, "Cannot load elf file %s: %s\n",
+            file, strerror(errno));
+    return false;
+  }
+
+  return true;
 }

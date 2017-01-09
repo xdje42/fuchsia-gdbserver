@@ -47,13 +47,12 @@ executable("sptdecode") {
   output_name = "sptdecode"
 
   sources = [
-    "dtools.c",
-    "dtools.h",
-    "elf-util.c",
-    "elf-util.h",
+    "elf-util.cc",
     "map.c",
     "map.h",
     "sptdecode.cc",
+    "state.cc",
+    "state.h",
     "symtab.c",
     "symtab.h",
     "util.c",

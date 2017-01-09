@@ -41,7 +41,7 @@ struct symtab *symtabs;
 
 /* caller must fill in st->end */
 struct symtab *add_symtab(unsigned num, unsigned long cr3,
-			  unsigned long base, char *fn)
+			  unsigned long base, const char *fn)
 {
   struct symtab *st = malloc(sizeof(struct symtab));
   if (!st)

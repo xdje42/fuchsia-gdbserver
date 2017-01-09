@@ -31,7 +31,7 @@
 
 
 #define _GNU_SOURCE 1
-#include <intel-pt.h>
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -41,10 +41,14 @@
 #include <assert.h>
 #include <stddef.h>
 
+#include <vector>
+#include <string>
+
+#include <intel-pt.h>
+
 #include "map.h"
-#include "elf-util.h"
 #include "symtab.h"
-#include "dtools.h"
+#include "state.h"
 
 #ifdef HAVE_UDIS86
 #include <udis86.h>
@@ -54,9 +58,11 @@
 #define container_of(ptr, type, member)                 \
   ((type *)((char *)(ptr) - offsetof(type, member)))
 
-bool abstime;
-bool dump_pc;
-bool dump_insn;
+static bool abstime;
+static bool dump_pc;
+static bool dump_insn;
+
+static double tsc_freq; // TODO(dje): See dtools.c.
 
 /* Includes branches and anything with a time. Always
  * flushed on any resyncs.
@@ -72,9 +78,11 @@ struct sinsn {
   unsigned iterations;
   uint32_t ratio;
   uint64_t cr3;
-  unsigned speculative : 1, aborted : 1, committed : 1, disabled : 1, enabled : 1, resumed : 1,
+  unsigned speculative : 1, aborted : 1, committed : 1,
+    disabled : 1, enabled : 1, resumed : 1,
     interrupted : 1, resynced : 1;
 };
+
 #define NINSN 256
 
 static void transfer_events(struct sinsn *si, struct pt_insn *insn)
@@ -414,8 +422,9 @@ static void print_output(struct sinsn *insnbuf, int sic,
   }
 }
 
-static int decode(struct pt_insn_decoder *decoder)
+static int decode(IptDecoderState* state)
 {
+  struct pt_insn_decoder *decoder = state->decoder_;
   struct global_pstate gps = { };
   uint64_t last_ts = 0;
   struct local_pstate ps;
@@ -543,74 +552,96 @@ static void print_header(void)
          "OPERATION");
 }
 
-void usage(void)
-{
-  fprintf(stderr, "sptdecode --pt ptfile --elf elffile ...\n");
-  fprintf(stderr, "-p/--pt ptfile   PT input file. Required\n");
-  fprintf(stderr, "-e/--elf binary[:codebin]  ELF input PT files. Can be specified multiple times.\n");
-  fprintf(stderr, "                   When codebin is specified read code from codebin\n");
-  fprintf(stderr, "-s/--sideband log  Load side band log. Needs access to binaries\n");
-  fprintf(stderr, "--pc/-c          dump numeric instruction addresses\n");
-  fprintf(stderr, "--insn/-i        dump instruction bytes\n");
-  fprintf(stderr, "--tsc/-t	  print time as TSC\n");
-  fprintf(stderr, "--abstime/-a	  print absolute time instead of relative to trace\n");
-#if 0 /* needs more debugging */
-  fprintf(stderr, "--loop/-l	  detect loops\n");
+static constexpr char usage_string[] =
+  "sptdecode --pt ptfile --elf elffile ...\n"
+  "\n"
+  "These options are required:\n"
+  "\n"
+  "-p/--pt ptfile     PT input file. Required\n"
+  "--cpuid/-C file    Name of the .cpuid file (sideband data)\n"
+  "--ids/-I file      An \"ids.txt\" file, which provides build-id\n"
+  "                   to debug-info-containing ELF file (sideband data)\n"
+  "                   Maybe be specified multiple times.\n"
+  "--ktrace/-K file   Name of the .ktrace file (sideband data)\n"
+  "--map/-M file      Name of file containing mappings of ELF files to their\n"
+  "                   load addresses (sideband data)\n"
+  "\n"
+  "The remaining options are, umm, optional.\n"
+  "\n"
+  "-e/--elf binary[:codebin]  ELF input PT files\n"
+  "                   Can be specified multiple times.\n"
+  "                   When codebin is specified read code from codebin.\n"
+  "-k/kernel file     Name of the kernel ELF file\n"
+  "--pc/-c            Dump numeric instruction addresses\n"
+  "--insn/-i          Dump instruction bytes\n"
+  "--tsc/-t	      Print time as TSC\n"
+  "--abstime/-a	      Print absolute time instead of relative to trace\n"
+#if 0 // needs more debugging
+  fprintf(stderr, "--loop/-l	  detect loops\n"
 #endif
+  ;
+
+static void usage(void)
+{
+  fprintf(stderr, "%s", usage_string);
   exit(1);
 }
 
 struct option opts[] = {
+  { "abstime", no_argument, NULL, 'a' },
   { "elf", required_argument, NULL, 'e' },
   { "pt", required_argument, NULL, 'p' },
   { "pc", no_argument, NULL, 'c' },
   { "insn", no_argument, NULL, 'i' },
-  { "sideband", required_argument, NULL, 's' },
+#if 0 // needs more debugging
   { "loop", no_argument, NULL, 'l' },
+#endif
   { "tsc", no_argument, NULL, 't' },
   { "kernel", required_argument, NULL, 'k' },
-  { "abstime", no_argument, NULL, 'a' },
+  { "cpuid", required_argument, NULL, 'C' },
+  { "ids", required_argument, NULL, 'I' },
+  { "ktrace", required_argument, NULL, 'K' },
+  { "map", required_argument, NULL, 'M' },
   { }
 };
 
 int main(int ac, char **av)
 {
-  struct pt_config config;
-  struct pt_insn_decoder *decoder = NULL;
+  auto state = new IptDecoderState();
   struct pt_image *image = pt_image_alloc("simple-pt");
   int c;
   bool use_tsc_time = false;
-  char *kernel_fn = NULL;
+  const char* pt_file = NULL;
+  std::vector<const char*> elf_files;
+  const char* kernel_file = NULL;
+  const char* cpuid_file = NULL;
+  std::vector<const char*> ids_files;
+  const char* ktrace_file = NULL;
+  const char* map_file = NULL;
 
-  pt_config_init(&config);
-  while ((c = getopt_long(ac, av, "e:p:is:ltdk:a", opts, NULL)) != -1) {
+  pt_config_init(&state->config_);
+
+  while ((c = getopt_long(ac, av, "ae:p:is:ltdk:C:I:K:M:", opts, NULL)) != -1) {
     switch (c) {
+    case 'a':
+      abstime = true;
+      break;
     case 'e':
-      if (read_elf(optarg, image, 0, 0, 0, 0) < 0) {
-        fprintf(stderr, "Cannot load elf file %s: %s\n",
-                optarg, strerror(errno));
-      }
+      elf_files.push_back(optarg);
       break;
     case 'p':
       /* FIXME */
-      if (decoder) {
+      if (pt_file) {
         fprintf(stderr, "Only one PT file supported\n");
         usage();
       }
-      decoder = init_decoder(optarg, &config);
+      pt_file = optarg;
       break;
     case 'c':
       dump_pc = true;
       break;
     case 'i':
       dump_insn = true;
-      break;
-    case 's':
-      if (decoder) {
-        fprintf(stderr, "Sideband must be loaded before --pt\n");
-        exit(1);
-      }
-      load_sideband(optarg, image, &config);
       break;
     case 'l':
       detect_loop = true;
@@ -619,27 +650,73 @@ int main(int ac, char **av)
       use_tsc_time = true;
       break;
     case 'k':
-      kernel_fn = optarg;
+      kernel_file = optarg;
       break;
-    case 'a':
-      abstime = true;
+    case 'C':
+      cpuid_file = optarg;
+      break;
+    case 'I':
+      ids_files.push_back(optarg);
+      break;
+    case 'K':
+      ktrace_file = optarg;
+      break;
+    case 'M':
+      map_file = optarg;
       break;
     default:
       usage();
     }
   }
+
+  if (ac - optind != 0)
+    usage();
+  if (!pt_file)
+    usage();
+  if (!cpuid_file || ids_files.size() == 0 || !ktrace_file || !map_file)
+    usage();
+
+  state->SetImage(image);
+
+  // Read sideband data before we read anything else.
+
+  if (!state->ReadCpuidFile(cpuid_file))
+    exit(1);
+  for (auto f : ids_files) {
+    if (!state->ReadIdsFile(f))
+      exit(1);
+  }
+  if (!state->ReadKtraceFile(ktrace_file))
+    exit(1);
+  if (!state->ReadMapFile(map_file))
+    exit(1);
+
+  for (auto f : ids_files) {
+    if (!state->ReadIdsFile(f))
+      exit(1);
+  }
+
+  for (auto f : elf_files) {
+    if (!state->ReadElf(f))
+      exit(1);
+  }
+
+  if (kernel_file) {
+    if (!state->ReadStaticElf(kernel_file))
+      exit(1);
+  }
+
+  if (!state->AllocDecoder(pt_file))
+    exit(1);
+
   if (use_tsc_time)
     tsc_freq = 0;
-  if (decoder) {
-    if (kernel_fn)
-      read_static_elf(kernel_fn, image);
-    pt_insn_set_image(decoder, image);
-  }
-  if (ac - optind != 0 || !decoder)
-    usage();
+
   print_header();
-  decode(decoder);
-  pt_image_free(image);
-  pt_insn_free_decoder(decoder);
+
+  decode(state);
+
+  delete state;
+
   return 0;
 }
