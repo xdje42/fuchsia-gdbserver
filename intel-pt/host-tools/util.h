@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-int print_addr(char *fn, unsigned long addr);
+char* xstrdup(const char* s);
 
 #ifdef __cplusplus
 } // extern "C"

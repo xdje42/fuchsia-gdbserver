@@ -34,8 +34,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+
+#include "elf-util.h"
 #include "symtab.h"
-#include "elf.h"
+#include "util.h"
 
 void read_symtab(Elf *elf, uint64_t cr3, uint64_t base, uint64_t offset, char *fn)
 {
@@ -58,7 +60,7 @@ void read_symtab(Elf *elf, uint64_t cr3, uint64_t base, uint64_t offset, char *f
       for (j = 0; j < numsym; j++) {
         sym = gelf_getsymshndx(data, NULL, j, &symbol, NULL);
         s = &st->syms[j];
-        s->name = strdup(elf_strptr(elf, shdr.sh_link, sym->st_name));
+        s->name = xstrdup(elf_strptr(elf, shdr.sh_link, sym->st_name));
         s->val = sym->st_value + offset;
         s->size = sym->st_size;
         if (st->end < s->val + s->size)

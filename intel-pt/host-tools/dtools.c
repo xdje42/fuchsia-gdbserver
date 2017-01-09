@@ -36,9 +36,10 @@
 #include <string.h>
 #include <ctype.h>
 #include <cpuid.h>
+
 #include "dtools.h"
 #include "map.h"
-#include "elf.h"
+#include "elf-util.h"
 #include "symtab.h"
 
 double tsc_freq;

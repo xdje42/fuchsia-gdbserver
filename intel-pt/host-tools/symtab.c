@@ -33,7 +33,9 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
+
 #include "symtab.h"
+#include "util.h"
 
 struct symtab *symtabs;
 
@@ -53,7 +55,7 @@ struct symtab *add_symtab(unsigned num, unsigned long cr3,
   if (!st->syms)
     exit(ENOMEM);
   st->end = 0;
-  st->fn = fn ? strdup(fn) : NULL;
+  st->fn = fn ? xstrdup(fn) : NULL;
   return st;
 }
 
@@ -117,7 +119,7 @@ bool seen_cr3(unsigned long cr3)
 
 void dump_symtab(struct symtab *st)
 {
-  int j;
+  unsigned j;
   for (j = 0; j < st->num; j++) {
     struct sym *s = &st->syms[j];
     if (s->val && s->name[0])

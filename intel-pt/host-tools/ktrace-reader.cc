@@ -72,12 +72,12 @@ struct TestData {
 };
 
 static void Dump_16B(const ktrace_rec_32b_t* rec) {
-  printf(" tid 0x%x, ts 0x%," PRIx64, rec->tid, rec->ts);
+  printf(" tid 0x%x, ts 0x%" PRIx64, rec->tid, rec->ts);
   printf(" a 0x%x, b 0x%x", rec->a, rec->b);
 }
 
 static void Dump_32B(const ktrace_rec_32b_t* rec) {
-  printf(" tid 0x%x, ts 0x%," PRIx64, rec->tid, rec->ts);
+  printf(" tid 0x%x, ts 0x%" PRIx64, rec->tid, rec->ts);
   printf(" a 0x%x, b 0x%x, c 0x%x, d 0x%x", rec->a, rec->b, rec->c, rec->d);
 }
 

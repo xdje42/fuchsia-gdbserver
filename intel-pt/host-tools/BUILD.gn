@@ -1,0 +1,87 @@
+# Copyright 2016 The Fuchsia Authors. All rights reserved.  Use of
+# this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# For test purposes
+config("host_magenta") {
+  cflags = [
+  ]
+}
+
+executable("ktrace-reader") {
+  configs += [
+    ":host_magenta",
+  ]
+
+  output_name = "ktrace-reader"
+
+  sources = [
+    "ktrace-reader.cc",
+    "ktrace-reader.h",
+  ]
+
+  # This is to find magenta/ktrace.h.
+  # TODO(dje): Temp hack until its exported for use by host tools.
+  include_dirs = [
+    ".",
+  ]
+
+  defines = [
+    "TEST",
+  ]
+
+  libs = [
+    "pthread",
+  ]
+
+  deps = [
+    "//lib/ftl",
+  ]
+}
+
+executable("sptdecode") {
+  configs += [
+    ":host_magenta",
+  ]
+
+  output_name = "sptdecode"
+
+  sources = [
+    "dtools.c",
+    "dtools.h",
+    "elf-util.c",
+    "elf-util.h",
+    "map.c",
+    "map.h",
+    "sptdecode.cc",
+    "symtab.c",
+    "symtab.h",
+    "util.c",
+    "util.h",
+  ]
+
+  # This is to find magenta/ktrace.h.
+  # TODO(dje): Temp hack until its exported for use by host tools.
+  include_dirs = [
+    ".",
+    "/hack/fuchsia/ipt/simplept/github/real-processor-trace/libipt/include",
+    "/hack/fuchsia/ipt/simplept/github/udis86",
+  ]
+
+  ldflags = [
+    "-L/hack/fuchsia/ipt/simplept/github/real-processor-trace/lib",
+    "-L/hack/fuchsia/ipt/simplept/github/udis86/libudis86/.libs",
+    "-Wl,-rpath,/hack/fuchsia/ipt/simplept/github/real-processor-trace/lib",
+    "-Wl,-rpath,/hack/fuchsia/ipt/simplept/github/udis86/libudis86/.libs",
+  ]
+
+  libs = [
+    "elf",
+    "ipt",
+    "pthread",
+  ]
+
+  deps = [
+    "//lib/ftl",
+  ]
+}

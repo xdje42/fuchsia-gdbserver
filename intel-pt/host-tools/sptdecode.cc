@@ -42,10 +42,9 @@
 #include <stddef.h>
 
 #include "map.h"
-#include "elf.h"
+#include "elf-util.h"
 #include "symtab.h"
 #include "dtools.h"
-#include "dwarf.h"
 
 #ifdef HAVE_UDIS86
 #include <udis86.h>
@@ -58,7 +57,6 @@
 bool abstime;
 bool dump_pc;
 bool dump_insn;
-bool dump_dwarf;
 
 /* Includes branches and anything with a time. Always
  * flushed on any resyncs.
@@ -95,7 +93,7 @@ static void transfer_events(struct sinsn *si, struct pt_insn *insn)
 
 static void print_ip(uint64_t ip, uint64_t cr3, bool print_cr3);
 
-static void print_ev(char *name, struct sinsn *insn)
+static void print_ev(const char *name, struct sinsn *insn)
 {
   printf("%s ", name);
   print_ip(insn->ip, insn->cr3, true);
@@ -137,7 +135,6 @@ static void print_tsx(struct sinsn *insn, int *prev_spec, int *indent)
     *indent = 0;
 }
 
-// XXX print dwarf
 static void print_ip(uint64_t ip, uint64_t cr3, bool print_cr3)
 {
   struct sym *sym = findsym(ip, cr3);
@@ -191,9 +188,9 @@ static void print_time(uint64_t ts, uint64_t *last_ts,uint64_t *first_ts)
   printf("%-24s", buf);
 }
 
-static char *insn_class(enum pt_insn_class class)
+static const char* insn_class(enum pt_insn_class iclass)
 {
-  static char *class_name[] = {
+  static const char * const class_name[] = {
     [ptic_error] = "error",
     [ptic_other] = "other",
     [ptic_call] = "call",
@@ -204,7 +201,7 @@ static char *insn_class(enum pt_insn_class class)
     [ptic_far_return] = "fret",
     [ptic_far_jump] = "fjump",
   };
-  return class < ARRAY_SIZE(class_name) ? class_name[class] : "?";
+  return iclass < ARRAY_SIZE(class_name) ? class_name[iclass] : "?";
 }
 
 #ifdef HAVE_UDIS86
@@ -274,8 +271,10 @@ static void print_insn(struct pt_insn *insn, uint64_t total_insncnt,
   if (insn->interrupted)
     printf("\tINT");
   printf("\n");
+#if 0 // TODO(dje): use libbacktrace?
   if (dump_dwarf)
     print_addr(find_ip_fn(insn->ip, cr3), insn->ip);
+#endif
 }
 
 bool detect_loop = false;
@@ -417,10 +416,13 @@ static void print_output(struct sinsn *insnbuf, int sic,
 
 static int decode(struct pt_insn_decoder *decoder)
 {
-  struct global_pstate gps = { .first_ts = 0, .last_ts = 0 };
+  struct global_pstate gps = { };
   uint64_t last_ts = 0;
   struct local_pstate ps;
   struct dis dis;
+
+  gps.first_ts = 0;
+  gps.last_ts = 0;
 
   /* this doesn't need to be accurate, it's just to generate
      referenceable numbers in the output */
@@ -474,7 +476,7 @@ static int decode(struct pt_insn_decoder *decoder)
           prev_ratio = ratio;
         }
         /* This happens when -K is used. Match everything for now. */
-        if (si->cr3 == -1L)
+        if (si->cr3 == -1UL)
           si->cr3 = 0;
         if (si->ts && si->ts == last_ts)
           si->ts = 0;
@@ -551,7 +553,6 @@ void usage(void)
   fprintf(stderr, "--pc/-c          dump numeric instruction addresses\n");
   fprintf(stderr, "--insn/-i        dump instruction bytes\n");
   fprintf(stderr, "--tsc/-t	  print time as TSC\n");
-  fprintf(stderr, "--dwarf/-d	  show line number information\n");
   fprintf(stderr, "--abstime/-a	  print absolute time instead of relative to trace\n");
 #if 0 /* needs more debugging */
   fprintf(stderr, "--loop/-l	  detect loops\n");
@@ -567,7 +568,6 @@ struct option opts[] = {
   { "sideband", required_argument, NULL, 's' },
   { "loop", no_argument, NULL, 'l' },
   { "tsc", no_argument, NULL, 't' },
-  { "dwarf", no_argument, NULL, 'd' },
   { "kernel", required_argument, NULL, 'k' },
   { "abstime", no_argument, NULL, 'a' },
   { }
@@ -617,9 +617,6 @@ int main(int ac, char **av)
       break;
     case 't':
       use_tsc_time = true;
-      break;
-    case 'd':
-      dump_dwarf = true;
       break;
     case 'k':
       kernel_fn = optarg;

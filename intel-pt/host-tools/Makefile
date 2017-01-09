@@ -25,7 +25,7 @@ LDFLAGS :=
 LDLIBS :=
 
 SPTDECODE_LDFLAGS = $(LIBIPT_LDFLAGS) $(UDIS86_LDFLAGS)
-SPTDECODE_LDLIBS = -lipt -ludis86 -ldwarf -lelf
+SPTDECODE_LDLIBS = -lipt -ludis86 -lelf
 
 ALL := ktrace-reader sptdecode
 
@@ -37,7 +37,7 @@ ktrace-reader: ktrace-reader.cc ktrace-reader.h
 ktrace-reader.o: ktrace-reader.cc ktrace-reader.h
 	$(CXX) -c -o $@ ktrace-reader.cc
 
-SPTDECODE_OBJS := sptdecode.o map.o elf.o symtab.o dtools.o dwarf.o
+SPTDECODE_OBJS := sptdecode.o map.o elf-util.o symtab.o dtools.o util.o
 
 sptdecode: LDFLAGS += $(SPTDECODE_LDFLAGS)
 sptdecode: LDLIBS += $(SPTDECODE_LDLIBS)
