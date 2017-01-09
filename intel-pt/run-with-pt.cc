@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <link.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -33,6 +34,11 @@ static constexpr char ktrace_device_path[] = "/dev/misc/ktrace";
 
 static constexpr char pt_output_path_prefix[] = "/tmp/ptout";
 static constexpr char ktrace_output_path[] = "/tmp/ptout.ktrace";
+
+static constexpr char ldso_trace_env_var[] = "LD_TRACE_FILE";
+static constexpr char ldso_trace_output_path[] = "/tmp/ptout.ldso";
+
+static constexpr char cpuid_output_path[] = "/tmp/ptout.cpuid";
 
 static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
                         mx_handle_t* out_ktrace_handle) {
@@ -220,12 +226,12 @@ static void DumpPerf() {
   }
   close(ktrace_fd);
 
-  FILE* f = fopen("/tmp/ptout.cpuid", "w");
+  FILE* f = fopen(cpuid_output_path, "w");
   if (f != nullptr) {
     DumpArch(f);
     fclose(f);
   } else {
-    FTL_LOG(ERROR) << "unable to write PT config to /tmp/pt.cpuid";
+    FTL_LOG(ERROR) << "unable to write PT config to " << cpuid_output_path;
   }
 }
 
@@ -324,10 +330,17 @@ int main(int argc, char* argv[]) {
     c_args[i] = inferior_argv[i].c_str();
   const char* name = util::basename(c_args[0]);
 
+  // We need details of where the program and its dsos are loaded.
+  // This data is obtained from the dynamic linker.
+  // TODO(dje): Is there a better way?
+  setenv(ldso_trace_env_var, ldso_trace_output_path, 1);
+
   FTL_LOG(INFO) << "Starting program: " << inferior_argv[0];
 
-  int rc = EXIT_SUCCESS;
+  int rc = EXIT_SUCCESS;  
 
+  // Defer turning on tracing as long as possible so that we don't include
+  // all this initialization.
   StartPerf();
 
   // N.B. It's important that the PT device be closed at this point as we
