@@ -46,6 +46,10 @@
 
 #include <intel-pt.h>
 
+#include "lib/ftl/command_line.h"
+#include "lib/ftl/log_settings.h"
+#include "lib/ftl/logging.h"
+
 #include "map.h"
 #include "symtab.h"
 #include "state.h"
@@ -61,8 +65,6 @@
 static bool abstime;
 static bool dump_pc;
 static bool dump_insn;
-
-static double tsc_freq; // TODO(dje): See dtools.c.
 
 /* Includes branches and anything with a time. Always
  * flushed on any resyncs.
@@ -163,11 +165,11 @@ static void print_ip(uint64_t ip, uint64_t cr3, bool print_cr3)
   }
 }
 
-static double tsc_us(int64_t t)
+static double tsc_us(IptDecoderState* state, int64_t t)
 {
-  if (tsc_freq == 0)
+  if (state->tsc_freq_ == 0)
     return t;
-  return (t / (tsc_freq*1000));
+  return (t / (state->tsc_freq_ * 1000));
 }
 
 static void print_tic(uint64_t tic)
@@ -180,18 +182,19 @@ static void print_time_indent(void)
   printf("%*s", 24, "");
 }
 
-static void print_time(uint64_t ts, uint64_t *last_ts,uint64_t *first_ts)
+static void print_time(IptDecoderState* state, uint64_t ts,
+                       uint64_t *last_ts, uint64_t *first_ts)
 {
   char buf[30];
   if (!*first_ts && !abstime)
     *first_ts = ts;
   if (!*last_ts)
     *last_ts = ts;
-  double rtime = tsc_us(ts - *first_ts);
-  snprintf(buf, sizeof buf, "%-9.*f [%+-.*f]", tsc_freq ? 3 : 0,
+  double rtime = tsc_us(state, ts - *first_ts);
+  snprintf(buf, sizeof buf, "%-9.*f [%+-.*f]", state->tsc_freq_ ? 3 : 0,
            rtime,
-           tsc_freq ? 3 : 0,
-           tsc_us(ts - *last_ts));
+           state->tsc_freq_ ? 3 : 0,
+           tsc_us(state, ts - *last_ts));
   *last_ts = ts;
   printf("%-24s", buf);
 }
@@ -285,7 +288,7 @@ static void print_insn(struct pt_insn *insn, uint64_t total_insncnt,
 #endif
 }
 
-bool detect_loop = false;
+static bool detect_loop = false;
 
 #define NO_ENTRY ((unsigned char)-1)
 #define CHASHBITS 8
@@ -367,9 +370,10 @@ static void print_loop(struct sinsn *si, struct local_pstate *ps)
   }
 }
 
-static void print_output(struct sinsn *insnbuf, int sic,
-			 struct local_pstate *ps,
-			 struct global_pstate *gps)
+static void print_output(IptDecoderState* state,
+                         struct sinsn *insnbuf, int sic,
+                         struct local_pstate *ps,
+                         struct global_pstate *gps)
 {
   int i;
   for (i = 0; i < sic; i++) {
@@ -391,7 +395,7 @@ static void print_output(struct sinsn *insnbuf, int sic,
     case ptic_call: {
       print_tic(si->tic);
       if (si->ts)
-        print_time(si->ts, &gps->last_ts, &gps->first_ts);
+        print_time(state, si->ts, &gps->last_ts, &gps->first_ts);
       else
         print_time_indent();
       printf("[+%4u] %*s", si->insn_delta, ps->indent, "");
@@ -412,7 +416,7 @@ static void print_output(struct sinsn *insnbuf, int sic,
       /* Always print if we have a time (for now) */
       if (si->ts) {
         print_tic(si->tic);
-        print_time(si->ts, &gps->last_ts, &gps->first_ts);
+        print_time(state, si->ts, &gps->last_ts, &gps->first_ts);
         printf("[+%4u] %*s", si->insn_delta, ps->indent, "");
         print_ip(si->ip, si->cr3, true);
         putchar('\n');
@@ -527,7 +531,7 @@ static int decode(IptDecoderState* state)
 
       if (detect_loop)
         sic = remove_loops(insnbuf, sic);
-      print_output(insnbuf, sic, &ps, &gps);
+      print_output(state, insnbuf, sic, &ps, &gps);
     } while (err == 0);
     if (err == -pte_eos)
       break;
@@ -557,25 +561,27 @@ static constexpr char usage_string[] =
   "\n"
   "These options are required:\n"
   "\n"
-  "-p/--pt ptfile     PT input file. Required\n"
+  "--pt/-p ptfile     PT input file. Required\n"
   "--cpuid/-C file    Name of the .cpuid file (sideband data)\n"
   "--ids/-I file      An \"ids.txt\" file, which provides build-id\n"
   "                   to debug-info-containing ELF file (sideband data)\n"
-  "                   Maybe be specified multiple times.\n"
+  "                   May be specified multiple times.\n"
   "--ktrace/-K file   Name of the .ktrace file (sideband data)\n"
   "--map/-M file      Name of file containing mappings of ELF files to their\n"
   "                   load addresses (sideband data)\n"
+  "                   May be specified multiple times.\n"
   "\n"
   "The remaining options are, umm, optional.\n"
   "\n"
-  "-e/--elf binary[:codebin]  ELF input PT files\n"
-  "                   Can be specified multiple times.\n"
+  "--elf/-e binary[:codebin]  ELF input PT files\n"
   "                   When codebin is specified read code from codebin.\n"
-  "-k/kernel file     Name of the kernel ELF file\n"
+  "                   May be specified multiple times.\n"
+  "kernel file/-k     Name of the kernel ELF file\n"
   "--pc/-c            Dump numeric instruction addresses\n"
   "--insn/-i          Dump instruction bytes\n"
   "--tsc/-t	      Print time as TSC\n"
   "--abstime/-a	      Print absolute time instead of relative to trace\n"
+  "--verbose=N        Set verbosity to N\n"
 #if 0 // needs more debugging
   fprintf(stderr, "--loop/-l	  detect loops\n"
 #endif
@@ -602,26 +608,28 @@ struct option opts[] = {
   { "ids", required_argument, NULL, 'I' },
   { "ktrace", required_argument, NULL, 'K' },
   { "map", required_argument, NULL, 'M' },
+  { "verbose", required_argument, NULL, 'v' },
   { }
 };
 
-int main(int ac, char **av)
+int main(int argc, char **argv)
 {
   auto state = new IptDecoderState();
-  struct pt_image *image = pt_image_alloc("simple-pt");
   int c;
   bool use_tsc_time = false;
   const char* pt_file = NULL;
-  std::vector<const char*> elf_files;
   const char* kernel_file = NULL;
   const char* cpuid_file = NULL;
-  std::vector<const char*> ids_files;
   const char* ktrace_file = NULL;
-  const char* map_file = NULL;
+  std::vector<const char*> elf_files;
+  std::vector<const char*> ids_files;
+  std::vector<const char*> map_files;
 
-  pt_config_init(&state->config_);
+  ftl::CommandLine cl = ftl::CommandLineFromArgcArgv(argc, argv);
+  if (!ftl::SetLogSettingsFromCommandLine(cl))
+    return EXIT_FAILURE;
 
-  while ((c = getopt_long(ac, av, "ae:p:is:ltdk:C:I:K:M:", opts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "ae:p:is:ltdk:C:I:K:M:", opts, NULL)) != -1) {
     switch (c) {
     case 'a':
       abstime = true;
@@ -662,34 +670,47 @@ int main(int ac, char **av)
       ktrace_file = optarg;
       break;
     case 'M':
-      map_file = optarg;
+      map_files.push_back(optarg);
+      break;
+    case 'v':
+      // already handled
       break;
     default:
       usage();
     }
   }
 
-  if (ac - optind != 0)
+  if (argc - optind != 0)
     usage();
   if (!pt_file)
     usage();
-  if (!cpuid_file || ids_files.size() == 0 || !ktrace_file || !map_file)
+  if (!cpuid_file || ids_files.size() == 0 || !ktrace_file ||
+      map_files.size() == 0)
     usage();
 
-  state->SetImage(image);
+  if (!state->AllocDecoder(pt_file))
+    exit(1);
+
+  if (!state->AllocImage("simple-pt"))
+    exit(1);
 
   // Read sideband data before we read anything else.
 
   if (!state->ReadCpuidFile(cpuid_file))
     exit(1);
+
   for (auto f : ids_files) {
     if (!state->ReadIdsFile(f))
       exit(1);
   }
+
   if (!state->ReadKtraceFile(ktrace_file))
     exit(1);
-  if (!state->ReadMapFile(map_file))
-    exit(1);
+
+  for (auto f : map_files) {
+    if (!state->ReadMapFile(f))
+      exit(1);
+  }
 
   for (auto f : ids_files) {
     if (!state->ReadIdsFile(f))
@@ -697,7 +718,8 @@ int main(int ac, char **av)
   }
 
   for (auto f : elf_files) {
-    if (!state->ReadElf(f))
+    // FIXME: This isn't useful without base addr, etc.
+    if (!state->ReadElf(f, 0, 0, 0, 0))
       exit(1);
   }
 
@@ -706,11 +728,8 @@ int main(int ac, char **av)
       exit(1);
   }
 
-  if (!state->AllocDecoder(pt_file))
-    exit(1);
-
   if (use_tsc_time)
-    tsc_freq = 0;
+    state->tsc_freq_ = 0;
 
   print_header();
 

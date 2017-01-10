@@ -43,7 +43,7 @@ struct symtab *symtabs;
 struct symtab *add_symtab(unsigned num, unsigned long cr3,
 			  unsigned long base, const char *fn)
 {
-  struct symtab *st = malloc(sizeof(struct symtab));
+  auto st = reinterpret_cast<struct symtab*>(malloc(sizeof(struct symtab)));
   if (!st)
     exit(ENOMEM);
   st->num = num;
@@ -51,18 +51,18 @@ struct symtab *add_symtab(unsigned num, unsigned long cr3,
   symtabs = st;
   st->cr3 = cr3;
   st->base = base;
-  st->syms = malloc(num * sizeof(struct sym));
+  st->syms = reinterpret_cast<struct sym*>(calloc(num, sizeof(struct sym)));
   if (!st->syms)
     exit(ENOMEM);
   st->end = 0;
-  st->fn = fn ? xstrdup(fn) : NULL;
+  st->fn = fn ? util::xstrdup(fn) : NULL;
   return st;
 }
 
 int cmp_sym(const void *ap, const void *bp)
 {
-  const struct sym *a = ap;
-  const struct sym *b = bp;
+  auto a = reinterpret_cast<const struct sym*>(ap);
+  auto b = reinterpret_cast<const struct sym*>(bp);
   if (a->val >= b->val && a->val < b->val + b->size)
     return 0;
   if (b->val >= a->val && b->val < a->val + a->size)
@@ -84,7 +84,9 @@ struct sym *findsym(unsigned long val, unsigned long cr3)
       continue;
     if (val < st->base || val >= st->end)
       continue;
-    s = bsearch(&search, st->syms,  st->num, sizeof(struct sym), cmp_sym);
+    s = reinterpret_cast<struct sym*>(bsearch(&search, st->syms,
+                                              st->num, sizeof(struct sym),
+                                              cmp_sym));
     if (s)
       return s;
   }

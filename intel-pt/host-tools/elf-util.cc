@@ -64,7 +64,7 @@ static void read_symtab(Elf *elf, uint64_t cr3, uint64_t base, uint64_t offset,
       for (j = 0; j < numsym; j++) {
         sym = gelf_getsymshndx(data, NULL, j, &symbol, NULL);
         s = &st->syms[j];
-        s->name = xstrdup(elf_strptr(elf, shdr.sh_link, sym->st_name));
+        s->name = util::xstrdup(elf_strptr(elf, shdr.sh_link, sym->st_name));
         s->val = sym->st_value + offset;
         s->size = sym->st_size;
         if (st->end < s->val + s->size)
@@ -205,7 +205,7 @@ static int read_elf(const char *file, struct pt_image *image,
 
   /* XXX add cache to read each file only once */
 
-  char* pfile = xstrdup(file);
+  char* pfile = util::xstrdup(file);
   char* p = strchr(pfile, ':');
   if (p) {
     *p = 0;
@@ -248,7 +248,7 @@ static int read_static_elf(const char *file, pt_image* image) {
 
   /* XXX add cache to read each file only once */
 
-  char* pfile = xstrdup(file);
+  char* pfile = util::xstrdup(file);
   char *p = strchr(pfile, ':');
   if (p) {
     *p = 0;
@@ -284,10 +284,11 @@ static int read_static_elf(const char *file, pt_image* image) {
   return true;
 }
 
-bool IptDecoderState::ReadElf(const char *file) {
+bool IptDecoderState::ReadElf(const char *file, uint64_t base, uint64_t cr3,
+                              uint64_t file_off, uint64_t map_len) {
   FTL_DCHECK(image_);
 
-  if (read_elf(file, image_, 0, 0, 0, 0) < 0) {
+  if (read_elf(file, image_, base, cr3, file_off, map_len) < 0) {
     fprintf(stderr, "Cannot load elf file %s: %s\n",
             file, strerror(errno));
     return false;

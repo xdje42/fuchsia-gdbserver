@@ -1,12 +1,6 @@
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include <stdbool.h>
-
 struct sym {
   char *name;
   unsigned long val;
@@ -32,7 +26,3 @@ struct symtab *add_symtab(unsigned num, unsigned long cr3, unsigned long base,
 void dump_symtab(struct symtab *st);
 void sort_symtab(struct symtab *st);
 bool seen_cr3(unsigned long cr3);
-
-#ifdef __cplusplus
-} // extern "C"
-#endif

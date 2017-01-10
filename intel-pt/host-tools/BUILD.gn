@@ -48,14 +48,17 @@ executable("sptdecode") {
 
   sources = [
     "elf-util.cc",
+    "ktrace-reader.cc",
+    "ktrace-reader.h",
     "map.c",
     "map.h",
     "sptdecode.cc",
+    "sideband.cc",
     "state.cc",
     "state.h",
-    "symtab.c",
+    "symtab.cc",
     "symtab.h",
-    "util.c",
+    "util.cc",
     "util.h",
   ]
 
