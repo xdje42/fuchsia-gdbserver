@@ -43,9 +43,9 @@ static constexpr char cpuid_output_path[] = "/tmp/ptout.cpuid";
 
 struct PerfConfig {
   PerfConfig()
-    : buffer_size(0), num_buffers(0) { }
+    : buffer_order(0), num_buffers(0) { }
   // zero means "unset, use default"
-  size_t buffer_size;
+  size_t buffer_order;
   size_t num_buffers;
 };
 
@@ -134,6 +134,22 @@ static void StartPerf(const PerfConfig& config) {
   if (status != NO_ERROR) {
     util::LogErrorWithMxStatus("ktrace start", status);
     goto Fail;
+  }
+
+  if (config.buffer_order > 0) {
+    ssize = ioctl_ipt_set_buffer_order(ipt_fd, &config.buffer_order);
+    if (ssize != 0) {
+      util::LogErrorWithMxStatus("set buffer order", ssize);
+      goto Fail;
+    }
+  }
+
+  if (config.num_buffers > 0) {
+    ssize = ioctl_ipt_set_num_buffers(ipt_fd, &config.num_buffers);
+    if (ssize != 0) {
+      util::LogErrorWithMxStatus("set num buffers", ssize);
+      goto Fail;
+    }
   }
 
   ssize = ioctl_ipt_alloc(ipt_fd);
@@ -289,8 +305,10 @@ constexpr char kUsageString[] =
     "  --help             show this help message\n"
     "  --quiet[=level]    set quietness level (opposite of verbose)\n"
     "  --verbose[=level]  set debug verbosity level\n"
-    "  --buffer-size=N    set buffer size\n"
+    "  --buffer-order=N   set buffer size, in pages, as a power of 2\n"
+    "                     The default is 2 - 16KB buffers.\n"
     "  --num-buffers=N    set number of buffers\n"
+    "                     The default is 16.\n"
     "\n"
     "--verbose=<level> : sets |min_log_level| to -level\n"
     "--quiet=<level>   : sets |min_log_level| to +level\n"
@@ -332,14 +350,14 @@ int main(int argc, char* argv[]) {
 
   std::string arg;
 
-  if (cl.GetOptionValue("buffer-size", &arg)) {
-    size_t buffer_size;
+  if (cl.GetOptionValue("buffer-order", &arg)) {
+    size_t buffer_order;
     if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
-                                              &buffer_size)) {
-      FTL_LOG(ERROR) << "Not a valid buffer size: " << optarg;
+                                              &buffer_order)) {
+      FTL_LOG(ERROR) << "Not a valid buffer order: " << optarg;
       return EXIT_FAILURE;
     }
-    config.buffer_size = buffer_size;
+    config.buffer_order = buffer_order;
   }
 
   if (cl.GetOptionValue("num-buffers", &arg)) {
