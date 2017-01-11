@@ -25,6 +25,7 @@
 #include "lib/ftl/log_settings.h"
 #include "lib/ftl/logging.h"
 #include "lib/ftl/strings/string_printf.h"
+#include "lib/ftl/strings/string_number_conversions.h"
 
 #include "util.h"
 #include "x86-pt.h"
@@ -39,6 +40,14 @@ static constexpr char ldso_trace_env_var[] = "LD_TRACE_FILE";
 static constexpr char ldso_trace_output_path[] = "/tmp/ptout.ldso";
 
 static constexpr char cpuid_output_path[] = "/tmp/ptout.cpuid";
+
+struct PerfConfig {
+  PerfConfig()
+    : buffer_size(0), num_buffers(0) { }
+  // zero means "unset, use default"
+  size_t buffer_size;
+  size_t num_buffers;
+};
 
 static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
                         mx_handle_t* out_ktrace_handle) {
@@ -92,7 +101,7 @@ static void DumpArch(FILE* out) {
   }
 }
 
-static void StartPerf() {
+static void StartPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "StartPerf called";
 
   int ipt_fd;
@@ -280,6 +289,8 @@ constexpr char kUsageString[] =
     "  --help             show this help message\n"
     "  --quiet[=level]    set quietness level (opposite of verbose)\n"
     "  --verbose[=level]  set debug verbosity level\n"
+    "  --buffer-size=N    set buffer size\n"
+    "  --num-buffers=N    set number of buffers\n"
     "\n"
     "--verbose=<level> : sets |min_log_level| to -level\n"
     "--quiet=<level>   : sets |min_log_level| to +level\n"
@@ -317,6 +328,30 @@ int main(int argc, char* argv[]) {
     DumpArch(stdout);
   }
 
+  PerfConfig config;
+
+  std::string arg;
+
+  if (cl.GetOptionValue("buffer-size", &arg)) {
+    size_t buffer_size;
+    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
+                                              &buffer_size)) {
+      FTL_LOG(ERROR) << "Not a valid buffer size: " << optarg;
+      return EXIT_FAILURE;
+    }
+    config.buffer_size = buffer_size;
+  }
+
+  if (cl.GetOptionValue("num-buffers", &arg)) {
+    size_t num_buffers;
+    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
+                                              &num_buffers)) {
+      FTL_LOG(ERROR) << "Not a valid buffer size: " << optarg;
+      return EXIT_FAILURE;
+    }
+    config.num_buffers = num_buffers;
+  }
+
   std::vector<std::string> inferior_argv(cl.positional_args().begin(),
                                          cl.positional_args().end());
 
@@ -341,7 +376,7 @@ int main(int argc, char* argv[]) {
 
   // Defer turning on tracing as long as possible so that we don't include
   // all this initialization.
-  StartPerf();
+  StartPerf(config);
 
   // N.B. It's important that the PT device be closed at this point as we
   // don't want the inferior to inherit the open descriptor: the device can

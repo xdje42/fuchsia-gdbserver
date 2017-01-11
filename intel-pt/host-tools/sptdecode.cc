@@ -49,6 +49,7 @@
 #include "lib/ftl/command_line.h"
 #include "lib/ftl/log_settings.h"
 #include "lib/ftl/logging.h"
+#include "lib/ftl/strings/string_number_conversions.h"
 
 #include "map.h"
 #include "symtab.h"
@@ -576,7 +577,9 @@ static constexpr char usage_string[] =
   "--elf/-e binary[:codebin]  ELF input PT files\n"
   "                   When codebin is specified read code from codebin.\n"
   "                   May be specified multiple times.\n"
-  "kernel file/-k     Name of the kernel ELF file\n"
+  "                   This option is not useful with PIE executables,\n"
+  "                     use sideband derived data instead.\n"
+  "kernel/-k FILE     Name of the kernel ELF file\n"
   "--pc/-c            Dump numeric instruction addresses\n"
   "--insn/-i          Dump instruction bytes\n"
   "--tsc/-t	      Print time as TSC\n"
@@ -629,7 +632,7 @@ int main(int argc, char **argv)
   if (!ftl::SetLogSettingsFromCommandLine(cl))
     return EXIT_FAILURE;
 
-  while ((c = getopt_long(argc, argv, "ae:p:is:ltdk:C:I:K:M:", opts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "ae:p:ciltk:C:I:K:M:", opts, NULL)) != -1) {
     switch (c) {
     case 'a':
       abstime = true;
@@ -658,6 +661,8 @@ int main(int argc, char **argv)
       use_tsc_time = true;
       break;
     case 'k':
+      // TODO(dje): While we don't need the kernel cr3, it would make things
+      // more robust to have it.
       kernel_file = optarg;
       break;
     case 'C':
