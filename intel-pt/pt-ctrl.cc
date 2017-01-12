@@ -41,10 +41,12 @@ static constexpr char ldso_trace_output_path[] = "/tmp/ptout.ldso";
 
 static constexpr char cpuid_output_path[] = "/tmp/ptout.cpuid";
 
+#define DEFAULT_NUM_BUFFERS 16
+#define DEFAULT_BUFFER_ORDER 2 // 16kb
+
 struct PerfConfig {
   PerfConfig()
-    : buffer_order(0), num_buffers(0) { }
-  // zero means "unset, use default"
+    : buffer_order(DEFAULT_BUFFER_ORDER), num_buffers(DEFAULT_NUM_BUFFERS) { }
   size_t buffer_order;
   size_t num_buffers;
 };
@@ -101,7 +103,45 @@ static void DumpArch(FILE* out) {
   }
 }
 
-static void StartPerf(const PerfConfig& config) {
+static bool InitPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "InitPerf called";
+
+  int ipt_fd;
+  mx_handle_t ktrace_handle;
+  ssize_t ssize;
+
+  if (!x86::HaveProcessorTrace()) {
+    FTL_LOG(INFO) << "PT not supported";
+    return false;
+  }
+
+  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
+    return false;
+
+  size_t buffer_size[2] = { config.buffer_order, config.num_buffers };
+  ssize = ioctl_ipt_set_buffer_size(ipt_fd, buffer_size, sizeof(buffer_size));
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("set buffer size", ssize);
+    goto Fail;
+  }
+
+  ssize = ioctl_ipt_alloc(ipt_fd);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("init perf", ssize);
+    goto Fail;
+  }
+
+  close(ipt_fd);
+  mx_handle_close(ktrace_handle);
+  return true;
+
+ Fail:
+  close(ipt_fd);
+  mx_handle_close(ktrace_handle);
+  return false;
+}
+
+static bool StartPerf() {
   FTL_LOG(INFO) << "StartPerf called";
 
   int ipt_fd;
@@ -111,11 +151,11 @@ static void StartPerf(const PerfConfig& config) {
 
   if (!x86::HaveProcessorTrace()) {
     FTL_LOG(INFO) << "PT not supported";
-    return;
+    return false;
   }
 
   if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
-    return;
+    return false;
 
   status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
   if (status != NO_ERROR) {
@@ -136,29 +176,8 @@ static void StartPerf(const PerfConfig& config) {
     goto Fail;
   }
 
-  if (config.buffer_order > 0) {
-    ssize = ioctl_ipt_set_buffer_order(ipt_fd, &config.buffer_order);
-    if (ssize != 0) {
-      util::LogErrorWithMxStatus("set buffer order", ssize);
-      goto Fail;
-    }
-  }
-
-  if (config.num_buffers > 0) {
-    ssize = ioctl_ipt_set_num_buffers(ipt_fd, &config.num_buffers);
-    if (ssize != 0) {
-      util::LogErrorWithMxStatus("set num buffers", ssize);
-      goto Fail;
-    }
-  }
-
-  ssize = ioctl_ipt_alloc(ipt_fd);
-  if (ssize != 0) {
-    util::LogErrorWithMxStatus("init perf", ssize);
-    goto Fail;
-  }
   ssize = ioctl_ipt_start(ipt_fd);
-  if (ssize != 0) {
+  if (ssize < 0) {
     util::LogErrorWithMxStatus("start perf", ssize);
     ioctl_ipt_free(ipt_fd);
     goto Fail;
@@ -166,7 +185,7 @@ static void StartPerf(const PerfConfig& config) {
 
   close(ipt_fd);
   mx_handle_close(ktrace_handle);
-  return;
+  return true;
 
  Fail:
 
@@ -176,6 +195,7 @@ static void StartPerf(const PerfConfig& config) {
 
   mx_handle_close(ktrace_handle);
   close(ipt_fd);
+  return false;
 }
 
 static void StopPerf() {
@@ -195,7 +215,7 @@ static void StopPerf() {
     return;
 
   ssize = ioctl_ipt_stop(ipt_fd);
-  if (ssize != 0) {
+  if (ssize < 0) {
     // TODO(dje): This is really bad, this shouldn't fail.
     util::LogErrorWithMxStatus("stop perf", ssize);
   }
@@ -229,7 +249,7 @@ static void DumpPerf() {
 
   ssize = ioctl_ipt_write_file(ipt_fd, pt_output_path_prefix,
                                strlen(pt_output_path_prefix));
-  if (ssize != 0) {
+  if (ssize < 0) {
     util::LogErrorWithMxStatus("stop perf", ssize);
   }
   close(ipt_fd);
@@ -281,7 +301,7 @@ static void ResetPerf() {
     return;
 
   ssize = ioctl_ipt_free(ipt_fd);
-  if (ssize != 0) {
+  if (ssize < 0) {
     util::LogErrorWithMxStatus("end perf", ssize);
   }
 
@@ -295,20 +315,28 @@ static void ResetPerf() {
 }
 
 constexpr char kUsageString[] =
-    "Usage: run-with-pt [options] program [args...]\n"
+    "Usage: pt-ctrl [options] program [args...]\n"
     "\n"
     "  program - the path to the executable to run\n"
     "\n"
     "Options:\n"
     "  --dump-arch        print random facts about the architecture at startup\n"
-    "  --stop-pt          turn off PT and exit\n"
     "  --help             show this help message\n"
     "  --quiet[=level]    set quietness level (opposite of verbose)\n"
     "  --verbose[=level]  set debug verbosity level\n"
     "  --buffer-order=N   set buffer size, in pages, as a power of 2\n"
-    "                     The default is 2 - 16KB buffers.\n"
+    "                     The default is 2: 16KB buffers.\n"
     "  --num-buffers=N    set number of buffers\n"
     "                     The default is 16.\n"
+    "\n"
+    "Options for controlling steps in process:\n"
+    "(only the first one seen is processed)\n"
+    "\n"
+    "  --init             allocate PT resources (buffers) and exit\n"
+    "  --start            turn on PT and exit\n"
+    "  --stop             turn off PT and exit\n"
+    "  --dump             dump PT data and exit\n"
+    "  --reset            reset PT (release all resources) and exit\n"
     "\n"
     "--verbose=<level> : sets |min_log_level| to -level\n"
     "--quiet=<level>   : sets |min_log_level| to +level\n"
@@ -325,51 +353,7 @@ static void PrintUsageString() {
   std::cout << kUsageString << std::endl;
 }
 
-int main(int argc, char* argv[]) {
-  ftl::CommandLine cl = ftl::CommandLineFromArgcArgv(argc, argv);
-
-  if (cl.HasOption("help", nullptr)) {
-    PrintUsageString();
-    return EXIT_SUCCESS;
-  }
-
-  if (!ftl::SetLogSettingsFromCommandLine(cl))
-    return EXIT_FAILURE;
-
-  if (cl.HasOption("stop-pt", nullptr)) {
-    StopPerf();
-    ResetPerf();
-    return EXIT_SUCCESS;
-  }
-
-  if (cl.HasOption("dump-arch", nullptr)) {
-    DumpArch(stdout);
-  }
-
-  PerfConfig config;
-
-  std::string arg;
-
-  if (cl.GetOptionValue("buffer-order", &arg)) {
-    size_t buffer_order;
-    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
-                                              &buffer_order)) {
-      FTL_LOG(ERROR) << "Not a valid buffer order: " << optarg;
-      return EXIT_FAILURE;
-    }
-    config.buffer_order = buffer_order;
-  }
-
-  if (cl.GetOptionValue("num-buffers", &arg)) {
-    size_t num_buffers;
-    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
-                                              &num_buffers)) {
-      FTL_LOG(ERROR) << "Not a valid buffer size: " << optarg;
-      return EXIT_FAILURE;
-    }
-    config.num_buffers = num_buffers;
-  }
-
+static int RunAndDump(ftl::CommandLine& cl, PerfConfig& config) {
   std::vector<std::string> inferior_argv(cl.positional_args().begin(),
                                          cl.positional_args().end());
 
@@ -390,11 +374,17 @@ int main(int argc, char* argv[]) {
 
   FTL_LOG(INFO) << "Starting program: " << inferior_argv[0];
 
-  int rc = EXIT_SUCCESS;  
+  if (!InitPerf(config))
+    return EXIT_FAILURE;
 
   // Defer turning on tracing as long as possible so that we don't include
-  // all this initialization.
-  StartPerf(config);
+  // all the initialization.
+  if (!StartPerf()) {
+    ResetPerf();
+    return EXIT_FAILURE;
+  }
+
+  int rc = EXIT_SUCCESS;
 
   // N.B. It's important that the PT device be closed at this point as we
   // don't want the inferior to inherit the open descriptor: the device can
@@ -432,4 +422,74 @@ int main(int argc, char* argv[]) {
   ResetPerf();
 
   return rc;
+}
+
+int main(int argc, char* argv[]) {
+  ftl::CommandLine cl = ftl::CommandLineFromArgcArgv(argc, argv);
+
+  if (cl.HasOption("help", nullptr)) {
+    PrintUsageString();
+    return EXIT_SUCCESS;
+  }
+
+  if (!ftl::SetLogSettingsFromCommandLine(cl))
+    return EXIT_FAILURE;
+
+  if (cl.HasOption("dump-arch", nullptr)) {
+    DumpArch(stdout);
+  }
+
+  PerfConfig config;
+  std::string arg;
+
+  if (cl.GetOptionValue("buffer-order", &arg)) {
+    size_t buffer_order;
+    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
+                                              &buffer_order)) {
+      FTL_LOG(ERROR) << "Not a valid buffer order: " << optarg;
+      return EXIT_FAILURE;
+    }
+    config.buffer_order = buffer_order;
+  }
+
+  if (cl.GetOptionValue("num-buffers", &arg)) {
+    size_t num_buffers;
+    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
+                                              &num_buffers)) {
+      FTL_LOG(ERROR) << "Not a valid buffer size: " << optarg;
+      return EXIT_FAILURE;
+    }
+    config.num_buffers = num_buffers;
+  }
+
+  if (cl.HasOption("init", nullptr)) {
+    if (!InitPerf(config))
+      return EXIT_FAILURE;
+    return EXIT_SUCCESS;
+  }
+
+  if (cl.HasOption("start", nullptr)) {
+    if (!StartPerf()) {
+      FTL_LOG(WARNING) << "Start failed, but buffers not removed";
+      return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+  }
+
+  if (cl.HasOption("stop", nullptr)) {
+    StopPerf();
+    return EXIT_SUCCESS;
+  }
+
+  if (cl.HasOption("dump", nullptr)) {
+    DumpPerf();
+    return EXIT_SUCCESS;
+  }
+
+  if (cl.HasOption("reset", nullptr)) {
+    ResetPerf();
+    return EXIT_SUCCESS;
+  }
+
+  return RunAndDump(cl, config);
 }

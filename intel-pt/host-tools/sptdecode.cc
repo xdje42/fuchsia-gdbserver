@@ -82,8 +82,8 @@ struct sinsn {
   uint32_t ratio;
   uint64_t cr3;
   unsigned speculative : 1, aborted : 1, committed : 1,
-    disabled : 1, enabled : 1, resumed : 1,
-    interrupted : 1, resynced : 1;
+    enabled : 1, disabled : 1, resumed : 1,
+    interrupted : 1, resynced : 1, stopped : 1;
 };
 
 #define NINSN 256
@@ -94,11 +94,12 @@ static void transfer_events(struct sinsn *si, struct pt_insn *insn)
   T(speculative);
   T(aborted);
   T(committed);
-  T(disabled);
   T(enabled);
+  T(disabled);
   T(resumed);
   T(interrupted);
   T(resynced);
+  T(stopped);
 #undef T
 }
 
@@ -114,10 +115,10 @@ static void print_ev(const char *name, struct sinsn *insn)
 static void print_event(struct sinsn *insn)
 {
 #if 0 /* Until these flags are reliable in libipt... */
-  if (insn->disabled)
-    print_ev("disabled", insn);
   if (insn->enabled)
     print_ev("enabled", insn);
+  if (insn->disabled)
+    print_ev("disabled", insn);
   if (insn->resumed)
     print_ev("resumed", insn);
 #endif
@@ -125,6 +126,8 @@ static void print_event(struct sinsn *insn)
     print_ev("interrupted", insn);
   if (insn->resynced)
     print_ev("resynced", insn);
+  if (insn->stopped)
+    print_ev("stopped", insn);
 }
 
 static void print_tsx(struct sinsn *insn, int *prev_spec, int *indent)
@@ -231,7 +234,7 @@ static const char *dis_resolve(struct ud *u, uint64_t addr, int64_t *off)
     *off = addr - sym->val;
     return sym->name;
   } else
-    return NULL;
+    return nullptr;
 }
 
 static void init_dis(struct dis *d)
@@ -371,13 +374,28 @@ static void print_loop(struct sinsn *si, struct local_pstate *ps)
   }
 }
 
+static const char* iclass_name(enum pt_insn_class iclass) {
+  // Note: The output expects this to be 7 chars or less.
+  switch (iclass) {
+  case ptic_error: return "error";
+  case ptic_other: return "other";
+  case ptic_call: return "call";
+  case ptic_return: return "return";
+  case ptic_jump: return "jump";
+  case ptic_cond_jump: return "cjump";
+  case ptic_far_call: return "fcall";
+  case ptic_far_return: return "freturn";
+  case ptic_far_jump: return "fjump";
+  default: return "???";
+  }
+}
+
 static void print_output(IptDecoderState* state,
                          struct sinsn *insnbuf, int sic,
                          struct local_pstate *ps,
                          struct global_pstate *gps)
 {
-  int i;
-  for (i = 0; i < sic; i++) {
+  for (int i = 0; i < sic; i++) {
     struct sinsn *si = &insnbuf[i];
 
     if (si->speculative || si->aborted || si->committed)
@@ -386,20 +404,26 @@ static void print_output(IptDecoderState* state,
       printf("frequency %d\n", si->ratio);
       gps->ratio = si->ratio;
     }
-    if (si->disabled || si->enabled || si->resumed ||
-        si->interrupted || si->resynced)
+    if (si->enabled || si->disabled ||
+        si->resumed || si->interrupted ||
+        si->resynced || si->stopped)
       print_event(si);
     if (detect_loop && (si->loop_start || si->loop_end))
       print_loop(si, ps);
+
+    // Note: For accurate output, the collection of instructions we do
+    // here needs to match the records printed by decode.
     switch (si->iclass) {
-    case ptic_far_call:
-    case ptic_call: {
+    case ptic_call:
+    case ptic_far_call: {
       print_tic(si->tic);
       if (si->ts)
         print_time(state, si->ts, &gps->last_ts, &gps->first_ts);
       else
         print_time_indent();
-      printf("[+%4u] %*s", si->insn_delta, ps->indent, "");
+      printf("[+%4u]", si->insn_delta);
+      printf(" %-7s", iclass_name(si->iclass));
+      printf(" %*s", ps->indent, "");
       print_ip(si->ip, si->cr3, true);
       printf(" -> ");
       print_ip(si->dst, si->cr3, false);
@@ -407,18 +431,31 @@ static void print_output(IptDecoderState* state,
       ps->indent += 4;
       break;
     }
-    case ptic_far_return:
     case ptic_return:
+    case ptic_far_return:
+      print_tic(si->tic);
+      if (si->ts)
+        print_time(state, si->ts, &gps->last_ts, &gps->first_ts);
+      else
+        print_time_indent();
+      printf("[+%4u]", si->insn_delta);
+      printf(" %-7s", iclass_name(si->iclass));
+      printf(" %*s", ps->indent, "");
+      print_ip(si->ip, si->cr3, true);
+      putchar('\n');
       ps->indent -= 4;
       if (ps->indent < 0)
         ps->indent = 0;
-      /* fallthrough */
+      break;
     default:
-      /* Always print if we have a time (for now) */
-      if (si->ts) {
+      // Always print if we have a time (for now).
+      // Also print error records so that insn counts are more accurate.
+      if (si->ts || si->iclass == ptic_error) {
         print_tic(si->tic);
         print_time(state, si->ts, &gps->last_ts, &gps->first_ts);
-        printf("[+%4u] %*s", si->insn_delta, ps->indent, "");
+        printf("[+%4u]", si->insn_delta);
+        printf(" %-7s", iclass_name(si->iclass));
+        printf(" %*s", ps->indent, "");
         print_ip(si->ip, si->cr3, true);
         putchar('\n');
       }
@@ -443,6 +480,7 @@ static int decode(IptDecoderState* state)
   uint64_t total_insncnt = 0;
 
   init_dis(&dis);
+
   for (;;) {
     uint64_t pos;
     int err = pt_insn_sync_forward(decoder);
@@ -461,27 +499,54 @@ static int decode(IptDecoderState* state)
     uint64_t errcr3 = 0;
     uint64_t errip = 0;
     uint32_t prev_ratio = 0;
+
     do {
       int sic = 0;
-      while (!err && sic < NINSN - 1) {
-        struct pt_insn insn;
+
+      // For calls we peek ahead to the next insn to see what function
+      // was called. If true |insn| is already filled in.
+      bool peeked_ahead = false;
+      struct pt_insn insn;
+
+      while (!err && sic < NINSN) {
         struct sinsn *si = &insnbuf[sic];
 
-        total_insncnt++;
+        // Do the increment before checking the result of pt_insn_next so that
+        // error lines have reference numbers as well.
+        ++total_insncnt;
 
-        insn.ip = 0;
-        pt_insn_time(decoder, &si->ts, NULL, NULL);
-        err = pt_insn_next(decoder, &insn, sizeof(struct pt_insn));
-        if (err < 0) {
-          pt_insn_get_cr3(decoder, &errcr3);
-          errip = insn.ip;
-          break;
+        pt_insn_time(decoder, &si->ts, nullptr, nullptr);
+        if (si->ts && si->ts == last_ts)
+          si->ts = 0;
+
+        if (!peeked_ahead) {
+          insn.ip = 0;
+          err = pt_insn_next(decoder, &insn, sizeof(struct pt_insn));
+          if (err < 0) {
+            pt_insn_get_cr3(decoder, &errcr3);
+            errip = insn.ip;
+            if (insncnt > 0) {
+              // don't lose track of the insns counted so far
+              si->iclass = ptic_error;
+              si->tic = total_insncnt;
+              si->cr3 = errcr3;
+              si->ip = insn.ip;
+              si->insn_delta = insncnt;
+              insncnt = 0;
+              ++sic;
+            }
+            break;
+          }
         }
+        peeked_ahead = false;
+        ++insncnt;
+
         // XXX use lost counts
+
         pt_insn_get_cr3(decoder, &si->cr3);
         if (dump_insn)
           print_insn(&insn, total_insncnt, si->ts, &dis, si->cr3);
-        insncnt++;
+
         uint32_t ratio;
         si->ratio = 0;
         pt_insn_core_bus_ratio(decoder, &ratio);
@@ -489,15 +554,24 @@ static int decode(IptDecoderState* state)
           si->ratio = ratio;
           prev_ratio = ratio;
         }
-        /* This happens when -K is used. Match everything for now. */
+
+        // This happens when -K is used. Match everything for now.
         if (si->cr3 == -1UL)
           si->cr3 = 0;
-        if (si->ts && si->ts == last_ts)
-          si->ts = 0;
+
         si->iclass = insn.iclass;
+
+        // Note: For accurate output, the collection of instructions we do
+        // here needs to match the records printed by print_output.
         if (insn.iclass == ptic_call || insn.iclass == ptic_far_call) {
           si->tic = total_insncnt;
           si->ip = insn.ip;
+          si->insn_delta = insncnt;
+          insncnt = 0;
+          ++sic;
+          transfer_events(si, &insn);
+          // Peek at the next insn to see what subroutine we called.
+          insn.ip = 0;
           err = pt_insn_next(decoder, &insn, sizeof(struct pt_insn));
           if (err < 0) {
             si->dst = 0;
@@ -505,27 +579,37 @@ static int decode(IptDecoderState* state)
             errip = insn.ip;
             break;
           }
+          peeked_ahead = true;
           si->dst = insn.ip;
-          if (!si->ts) {
-            pt_insn_time(decoder, &si->ts, NULL, NULL);
-            if (si->ts && si->ts == last_ts)
-              si->ts = 0;
-          }
-          si->insn_delta = insncnt;
-          insncnt = 1;
-          sic++;
-          transfer_events(si, &insn);
-        } else if (insn.iclass == ptic_return || insn.iclass == ptic_far_return || si->ts ||
-                   insn.enabled || insn.disabled || insn.resumed || insn.interrupted ||
-                   insn.resynced || insn.stopped || insn.aborted) {
+        } else if (insn.iclass == ptic_return ||
+                   insn.iclass == ptic_far_return ||
+                   // Always print if we have a time (for now).
+                   si->ts) {
           si->tic = total_insncnt;
           si->ip = insn.ip;
           si->insn_delta = insncnt;
           insncnt = 0;
-          sic++;
+          ++sic;
           transfer_events(si, &insn);
-        } else
+        } else if (insn.enabled || insn.disabled ||
+                   insn.resumed || insn.interrupted ||
+                   insn.resynced || insn.stopped ||
+                   insn.aborted) {
+#if 0 // part of experiment to get accurate insn counts in output
+          si->tic = total_insncnt;
+          si->ip = insn.ip;
+          si->insn_delta = insncnt;
+          insncnt = 0;
+          ++sic;
+          transfer_events(si, &insn);
+#else
           continue;
+#endif
+        } else {
+          // not interesting
+          continue;
+        }
+
         if (si->ts)
           last_ts = si->ts;
       }
@@ -534,8 +618,10 @@ static int decode(IptDecoderState* state)
         sic = remove_loops(insnbuf, sic);
       print_output(state, insnbuf, sic, &ps, &gps);
     } while (err == 0);
+
     if (err == -pte_eos)
       break;
+
     pt_insn_get_offset(decoder, &pos);
     printf("[%8llu] %llx:%llx:%llx: error %s\n",
            (unsigned long long)total_insncnt,
@@ -544,17 +630,19 @@ static int decode(IptDecoderState* state)
            (unsigned long long)errip,
            pt_errstr(pt_errcode(err)));
   }
+
   return 0;
 }
 
 static void print_header(void)
 {
-  printf("%-10s %-9s %-13s %-7s %s\n",
+  printf("%-10s %-9s %-13s %-7s %-7s %s\n",
          "REF#",
          "TIME",
          "DELTA",
          "INSNs",
-         "OPERATION");
+         "ICLASS",
+         "LOCATION");
 }
 
 static constexpr char usage_string[] =
@@ -597,21 +685,21 @@ static void usage(void)
 }
 
 struct option opts[] = {
-  { "abstime", no_argument, NULL, 'a' },
-  { "elf", required_argument, NULL, 'e' },
-  { "pt", required_argument, NULL, 'p' },
-  { "pc", no_argument, NULL, 'c' },
-  { "insn", no_argument, NULL, 'i' },
+  { "abstime", no_argument, nullptr, 'a' },
+  { "elf", required_argument, nullptr, 'e' },
+  { "pt", required_argument, nullptr, 'p' },
+  { "pc", no_argument, nullptr, 'c' },
+  { "insn", no_argument, nullptr, 'i' },
 #if 0 // needs more debugging
-  { "loop", no_argument, NULL, 'l' },
+  { "loop", no_argument, nullptr, 'l' },
 #endif
-  { "tsc", no_argument, NULL, 't' },
-  { "kernel", required_argument, NULL, 'k' },
-  { "cpuid", required_argument, NULL, 'C' },
-  { "ids", required_argument, NULL, 'I' },
-  { "ktrace", required_argument, NULL, 'K' },
-  { "map", required_argument, NULL, 'M' },
-  { "verbose", required_argument, NULL, 'v' },
+  { "tsc", no_argument, nullptr, 't' },
+  { "kernel", required_argument, nullptr, 'k' },
+  { "cpuid", required_argument, nullptr, 'C' },
+  { "ids", required_argument, nullptr, 'I' },
+  { "ktrace", required_argument, nullptr, 'K' },
+  { "map", required_argument, nullptr, 'M' },
+  { "verbose", required_argument, nullptr, 'v' },
   { }
 };
 
@@ -620,10 +708,10 @@ int main(int argc, char **argv)
   auto state = new IptDecoderState();
   int c;
   bool use_tsc_time = false;
-  const char* pt_file = NULL;
-  const char* kernel_file = NULL;
-  const char* cpuid_file = NULL;
-  const char* ktrace_file = NULL;
+  const char* pt_file = nullptr;
+  const char* kernel_file = nullptr;
+  const char* cpuid_file = nullptr;
+  const char* ktrace_file = nullptr;
   std::vector<const char*> elf_files;
   std::vector<const char*> ids_files;
   std::vector<const char*> map_files;
@@ -632,7 +720,7 @@ int main(int argc, char **argv)
   if (!ftl::SetLogSettingsFromCommandLine(cl))
     return EXIT_FAILURE;
 
-  while ((c = getopt_long(argc, argv, "ae:p:ciltk:C:I:K:M:", opts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "ae:p:ciltk:C:I:K:M:", opts, nullptr)) != -1) {
     switch (c) {
     case 'a':
       abstime = true;
@@ -703,11 +791,6 @@ int main(int argc, char **argv)
 
   if (!state->ReadCpuidFile(cpuid_file))
     exit(1);
-
-  for (auto f : ids_files) {
-    if (!state->ReadIdsFile(f))
-      exit(1);
-  }
 
   if (!state->ReadKtraceFile(ktrace_file))
     exit(1);

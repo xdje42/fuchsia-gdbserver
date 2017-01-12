@@ -2,11 +2,11 @@
 # this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-executable("run-with-pt") {
-  output_name = "run-with-pt"
+executable("pt-ctrl") {
+  output_name = "pt-ctrl"
 
   sources = [
-    "run-with-pt.cc",
+    "pt-ctrl.cc",
     "util.cc",
     "util.h",
     "x86-pt.cc",

@@ -125,6 +125,9 @@ bool IptDecoderState::ReadMapFile(const char* file) {
   int lineno = 1;
 
   for ( ; getline(&line, &linelen, f) > 0; ++lineno) {
+    size_t n = strlen(line);
+    if (n > 0 && line[n - 1] == '\n')
+      line[n - 1] = '\0';
     FTL_VLOG(2) << ftl::StringPrintf("read %d: %s", lineno, line);
 
 #define MAX_LINE_LEN 1024
@@ -141,12 +144,15 @@ bool IptDecoderState::ReadMapFile(const char* file) {
     char buildid[linelen];
     char name[linelen];
     char so_name[linelen];
+    // The sequence number is used for grouping records, done beforehand, but
+    // is no longer needed after that.
+    unsigned seqno;
     uint64_t pid, base_addr, load_addr, end_addr;
-    if (sscanf(line, "trace_load: %" PRIu64 ":"
+    if (sscanf(line, "trace_load: %" PRIu64 ":%x"
                " 0x%" PRIx64 " 0x%" PRIx64 " 0x%" PRIx64
                " %s %s %s",
-               &pid, &base_addr, &load_addr, &end_addr,
-               buildid, name, so_name) == 7) {
+               &pid, &seqno, &base_addr, &load_addr, &end_addr,
+               buildid, name, so_name) == 8) {
       if (!AddMap(pid, base_addr, load_addr, end_addr,
                   buildid, name, so_name)) {
         FTL_LOG(ERROR) << "Error adding map entry: " << line;
@@ -176,6 +182,9 @@ bool IptDecoderState::ReadIdsFile(const char* file) {
   int lineno = 1;
 
   for ( ; getline(&line, &linelen, f) > 0; ++lineno) {
+    size_t n = strlen(line);
+    if (n > 0 && line[n - 1] == '\n')
+      line[n - 1] = '\0';
     FTL_VLOG(2) << ftl::StringPrintf("read %d: %s", lineno, line);
 
 #define MAX_LINE_LEN 1024
