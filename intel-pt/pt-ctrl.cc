@@ -41,14 +41,20 @@ static constexpr char ldso_trace_output_path[] = "/tmp/ptout.ldso";
 
 static constexpr char cpuid_output_path[] = "/tmp/ptout.cpuid";
 
-#define DEFAULT_NUM_BUFFERS 16
-#define DEFAULT_BUFFER_ORDER 2 // 16kb
+constexpr size_t kDefaultNumBuffers = 16;
+constexpr size_t kDefaultBufferOrder = 2;  // 16kb
+constexpr uint64_t kDefaultCtlConfig = 0;
 
 struct PerfConfig {
   PerfConfig()
-    : buffer_order(DEFAULT_BUFFER_ORDER), num_buffers(DEFAULT_NUM_BUFFERS) { }
-  size_t buffer_order;
+    : num_buffers(kDefaultNumBuffers),
+      buffer_order(kDefaultBufferOrder),
+      ctl_config(kDefaultCtlConfig)
+    { }
   size_t num_buffers;
+  size_t buffer_order;
+  bool is_circular;
+  uint64_t ctl_config;
 };
 
 static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
@@ -118,10 +124,20 @@ static bool InitPerf(const PerfConfig& config) {
   if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
     return false;
 
-  size_t buffer_size[2] = { config.buffer_order, config.num_buffers };
+  size_t buffer_size[3] = {
+    config.num_buffers,
+    config.buffer_order,
+    config.is_circular
+  };
   ssize = ioctl_ipt_set_buffer_size(ipt_fd, buffer_size, sizeof(buffer_size));
   if (ssize < 0) {
     util::LogErrorWithMxStatus("set buffer size", ssize);
+    goto Fail;
+  }
+
+  ssize = ioctl_ipt_set_ctl_config(ipt_fd, &config.ctl_config);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("set CTL config", ssize);
     goto Fail;
   }
 
@@ -320,17 +336,22 @@ constexpr char kUsageString[] =
     "  program - the path to the executable to run\n"
     "\n"
     "Options:\n"
-    "  --dump-arch        print random facts about the architecture at startup\n"
+    "  --dump-arch        print random facts about the architecture and exit\n"
     "  --help             show this help message\n"
     "  --quiet[=level]    set quietness level (opposite of verbose)\n"
     "  --verbose[=level]  set debug verbosity level\n"
-    "  --buffer-order=N   set buffer size, in pages, as a power of 2\n"
-    "                     The default is 2: 16KB buffers.\n"
     "  --num-buffers=N    set number of buffers\n"
     "                     The default is 16.\n"
+    "  --buffer-order=N   set buffer size, in pages, as a power of 2\n"
+    "                     The default is 2: 16KB buffers.\n"
+    "  --circular         use a circular trace buffer\n"
+    "                     Otherwise tracing stops when the buffer fills.\n"
+    "  --ctl-config=BITS  set user-settable bits in CTL MSR\n"
+    "                     See Intel docs on IA32_RTIT_CTL MSR.\n"
     "\n"
     "Options for controlling steps in process:\n"
-    "(only the first one seen is processed)\n"
+    "Only the first one seen is processed.\n"
+    "These cannot be specified with a program to run.\n"
     "\n"
     "  --init             allocate PT resources (buffers) and exit\n"
     "  --start            turn on PT and exit\n"
@@ -353,10 +374,8 @@ static void PrintUsageString() {
   std::cout << kUsageString << std::endl;
 }
 
-static int RunAndDump(ftl::CommandLine& cl, PerfConfig& config) {
-  std::vector<std::string> inferior_argv(cl.positional_args().begin(),
-                                         cl.positional_args().end());
-
+static int RunAndDump(const std::vector<std::string>& inferior_argv,
+                      PerfConfig& config) {
   if (inferior_argv.size() == 0) {
     FTL_LOG(ERROR) << "Missing program";
     return EXIT_FAILURE;
@@ -437,29 +456,58 @@ int main(int argc, char* argv[]) {
 
   if (cl.HasOption("dump-arch", nullptr)) {
     DumpArch(stdout);
+    return EXIT_SUCCESS;
   }
 
   PerfConfig config;
   std::string arg;
 
+  if (cl.GetOptionValue("num-buffers", &arg)) {
+    size_t num_buffers;
+    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
+                                              &num_buffers)) {
+      FTL_LOG(ERROR) << "Not a valid buffer size: " << arg;
+      return EXIT_FAILURE;
+    }
+    config.num_buffers = num_buffers;
+  }
+
   if (cl.GetOptionValue("buffer-order", &arg)) {
     size_t buffer_order;
     if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
                                               &buffer_order)) {
-      FTL_LOG(ERROR) << "Not a valid buffer order: " << optarg;
+      FTL_LOG(ERROR) << "Not a valid buffer order: " << arg;
       return EXIT_FAILURE;
     }
     config.buffer_order = buffer_order;
   }
 
-  if (cl.GetOptionValue("num-buffers", &arg)) {
-    size_t num_buffers;
-    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
-                                              &num_buffers)) {
-      FTL_LOG(ERROR) << "Not a valid buffer size: " << optarg;
+  if (cl.HasOption("circular", nullptr)) {
+    config.is_circular = true;
+  }
+
+  if (cl.GetOptionValue("ctl-config", &arg)) {
+    uint64_t ctl_config;
+    if (!ftl::StringToNumberWithError<uint64_t>(ftl::StringView(arg),
+                                              &ctl_config, ftl::Base::k16)) {
+      FTL_LOG(ERROR) << "Not a valid CTL config value: " << arg;
       return EXIT_FAILURE;
     }
-    config.num_buffers = num_buffers;
+    config.ctl_config = ctl_config;
+  }
+
+  std::vector<std::string> inferior_argv(cl.positional_args().begin(),
+                                         cl.positional_args().end());
+
+  if (cl.HasOption("init", nullptr) ||
+      cl.HasOption("start", nullptr) ||
+      cl.HasOption("stop", nullptr) ||
+      cl.HasOption("dump", nullptr) ||
+      cl.HasOption("reset", nullptr)) {
+    if (inferior_argv.size() != 0) {
+      FTL_LOG(ERROR) << "Program cannot be specified";
+      return EXIT_FAILURE;
+    }
   }
 
   if (cl.HasOption("init", nullptr)) {
@@ -491,5 +539,5 @@ int main(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
-  return RunAndDump(cl, config);
+  return RunAndDump(inferior_argv, config);
 }

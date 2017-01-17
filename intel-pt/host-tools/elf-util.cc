@@ -241,9 +241,7 @@ static int read_elf(const char *file, struct pt_image *image,
   return 0;
 }
 
-// TODO(dje): cr3 should be an argument, but this is all wip wip wip
-
-static int read_static_elf(const char *file, pt_image* image) {
+static int read_static_elf(const char *file, pt_image* image, uint64_t cr3) {
   elf_version(EV_CURRENT);
 
   /* XXX add cache to read each file only once */
@@ -278,7 +276,8 @@ static int read_static_elf(const char *file, pt_image* image) {
     if (!elf)
       return false;
   }
-  add_progbits(elf, image, p, base, pt_asid_no_cr3, offset, file_off, len);
+  add_progbits(elf, image, p, base, cr3 ? cr3 : pt_asid_no_cr3,
+               offset, file_off, len);
 
   elf_close(elf, fd);
   return true;
@@ -297,10 +296,10 @@ bool IptDecoderState::ReadElf(const char *file, uint64_t base, uint64_t cr3,
   return true;
 }
 
-bool IptDecoderState::ReadStaticElf(const char *file) {
+bool IptDecoderState::ReadStaticElf(const char *file, uint64_t cr3) {
   FTL_DCHECK(image_);
 
-  if (read_static_elf(file, image_) < 0) {
+  if (read_static_elf(file, image_, cr3) < 0) {
     fprintf(stderr, "Cannot load elf file %s: %s\n",
             file, strerror(errno));
     return false;

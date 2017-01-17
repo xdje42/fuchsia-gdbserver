@@ -422,6 +422,7 @@ static void print_output(IptDecoderState* state,
       else
         print_time_indent();
       printf("[+%4u]", si->insn_delta);
+      printf(" %c", si->cr3 == state->kernel_cr3_ ? 'K' : 'U');
       printf(" %-7s", iclass_name(si->iclass));
       printf(" %*s", ps->indent, "");
       print_ip(si->ip, si->cr3, true);
@@ -439,6 +440,7 @@ static void print_output(IptDecoderState* state,
       else
         print_time_indent();
       printf("[+%4u]", si->insn_delta);
+      printf(" %c", si->cr3 == state->kernel_cr3_ ? 'K' : 'U');
       printf(" %-7s", iclass_name(si->iclass));
       printf(" %*s", ps->indent, "");
       print_ip(si->ip, si->cr3, true);
@@ -452,8 +454,12 @@ static void print_output(IptDecoderState* state,
       // Also print error records so that insn counts are more accurate.
       if (si->ts || si->iclass == ptic_error) {
         print_tic(si->tic);
-        print_time(state, si->ts, &gps->last_ts, &gps->first_ts);
+        if (si->ts)
+          print_time(state, si->ts, &gps->last_ts, &gps->first_ts);
+        else
+          print_time_indent();
         printf("[+%4u]", si->insn_delta);
+        printf(" %c", si->cr3 == state->kernel_cr3_ ? 'K' : 'U');
         printf(" %-7s", iclass_name(si->iclass));
         printf(" %*s", ps->indent, "");
         print_ip(si->ip, si->cr3, true);
@@ -528,6 +534,7 @@ static int decode(IptDecoderState* state)
             if (insncnt > 0) {
               // don't lose track of the insns counted so far
               si->iclass = ptic_error;
+              si->ts = 0;
               si->tic = total_insncnt;
               si->cr3 = errcr3;
               si->ip = insn.ip;
@@ -636,11 +643,12 @@ static int decode(IptDecoderState* state)
 
 static void print_header(void)
 {
-  printf("%-10s %-9s %-13s %-7s %-7s %s\n",
+  printf("%-10s %-9s %-13s %-7s %c %-7s %s\n",
          "REF#",
          "TIME",
          "DELTA",
          "INSNs",
+         '@',
          "ICLASS",
          "LOCATION");
 }
@@ -668,6 +676,7 @@ static constexpr char usage_string[] =
   "                   This option is not useful with PIE executables,\n"
   "                     use sideband derived data instead.\n"
   "kernel/-k FILE     Name of the kernel ELF file\n"
+  "kernel-cr3/3 CR3   CR3 value for the kernel (base 16)\n"
   "--pc/-c            Dump numeric instruction addresses\n"
   "--insn/-i          Dump instruction bytes\n"
   "--tsc/-t	      Print time as TSC\n"
@@ -695,6 +704,7 @@ struct option opts[] = {
 #endif
   { "tsc", no_argument, nullptr, 't' },
   { "kernel", required_argument, nullptr, 'k' },
+  { "kernel-cr3", required_argument, nullptr, '3' },
   { "cpuid", required_argument, nullptr, 'C' },
   { "ids", required_argument, nullptr, 'I' },
   { "ktrace", required_argument, nullptr, 'K' },
@@ -708,8 +718,10 @@ int main(int argc, char **argv)
   auto state = new IptDecoderState();
   int c;
   bool use_tsc_time = false;
-  const char* pt_file = nullptr;
   const char* kernel_file = nullptr;
+  // IWBN if this came from sideband data.
+  uint64_t kernel_cr3 = 0;
+  const char* pt_file = nullptr;
   const char* cpuid_file = nullptr;
   const char* ktrace_file = nullptr;
   std::vector<const char*> elf_files;
@@ -749,9 +761,14 @@ int main(int argc, char **argv)
       use_tsc_time = true;
       break;
     case 'k':
-      // TODO(dje): While we don't need the kernel cr3, it would make things
-      // more robust to have it.
       kernel_file = optarg;
+      break;
+    case '3':
+      if (!ftl::StringToNumberWithError<uint64_t>(ftl::StringView(optarg),
+                                                  &kernel_cr3, ftl::Base::k16)) {
+        FTL_LOG(ERROR) << "Not a valid cr3 number: " << optarg;
+        return EXIT_FAILURE;
+      }
       break;
     case 'C':
       cpuid_file = optarg;
@@ -812,7 +829,8 @@ int main(int argc, char **argv)
   }
 
   if (kernel_file) {
-    if (!state->ReadStaticElf(kernel_file))
+    state->SetKernelCr3(kernel_cr3);
+    if (!state->ReadStaticElf(kernel_file, kernel_cr3))
       exit(1);
   }
 

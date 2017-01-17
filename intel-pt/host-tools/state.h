@@ -37,6 +37,7 @@ class IptDecoderState {
   pt_insn_decoder* decoder_;
   pt_image* image_;
   double tsc_freq_; // TODO(dje): See dtools.c.
+  uint64_t kernel_cr3_;
 
   std::vector<Process> processes_;
   std::vector<Map> maps_;
@@ -53,7 +54,9 @@ class IptDecoderState {
 
   bool ReadElf(const char* file, uint64_t base, uint64_t cr3,
                uint64_t file_off, uint64_t map_len);
-  bool ReadStaticElf(const char* file);
+  bool ReadStaticElf(const char* file, uint64_t cr3);
+
+  void SetKernelCr3(uint64_t cr3) { kernel_cr3_ = cr3; }
 
   bool AddProcess(uint64_t pid, uint64_t cr3, uint64_t ts);
   bool AddMap(uint64_t pid,

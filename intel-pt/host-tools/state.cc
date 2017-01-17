@@ -40,7 +40,8 @@ BuildId::BuildId(const std::string& b, const std::string& f)
 IptDecoderState::IptDecoderState()
     : decoder_(nullptr),
       image_(nullptr),
-      tsc_freq_(0) {
+      tsc_freq_(0),
+      kernel_cr3_(0) {
   pt_config_init(&config_);
 }
 
@@ -82,7 +83,9 @@ bool IptDecoderState::AllocDecoder(const char* pt_file) {
 
 const Process* IptDecoderState::LookupProcess(uint64_t cr3) {
   for (auto& p : processes_) {
-    if (cr3 == p.cr3)
+    if (cr3 == p.cr3 ||
+        // If tracing just userspace, cr3 values in the trace may be this
+        cr3 == pt_asid_no_cr3)
       return &p;
   }
 
