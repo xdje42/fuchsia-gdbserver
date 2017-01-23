@@ -45,7 +45,7 @@ constexpr size_t kDefaultNumBuffers = 16;
 constexpr size_t kDefaultBufferOrder = 2;  // 16kb
 constexpr bool kDefaultIsCircular = false;
 constexpr uint64_t kDefaultCtlConfig = (
-  IPT_CTL_USER_ALLOWED | IPT_CTL_OS_ALLOWED |
+  IPT_CTL_OS_ALLOWED | IPT_CTL_USER_ALLOWED |
   IPT_CTL_BRANCH_EN |
   IPT_CTL_TSC_EN);
 
@@ -144,6 +144,8 @@ static bool InitPerf(const PerfConfig& config) {
       util::LogErrorWithMxStatus("init perf", ssize);
       goto Fail;
     }
+    // Buffers are automagically assigned to cpus, descriptor == cpu#,
+    // so we can just ignore descriptor here.
   }
 
   ssize = ioctl_ipt_cpu_mode_alloc(ipt_fd);
@@ -322,6 +324,8 @@ static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
       buffer_remaining -= to_write;
       bytes_left -= to_write;
     }
+
+    mx_handle_close(vmo);
   }
 
   assert(bytes_left == 0);
