@@ -43,14 +43,21 @@ static constexpr char cpuid_output_path[] = "/tmp/ptout.cpuid";
 
 constexpr size_t kDefaultNumBuffers = 16;
 constexpr size_t kDefaultBufferOrder = 2;  // 16kb
-constexpr uint64_t kDefaultCtlConfig = 0;
+constexpr bool kDefaultIsCircular = false;
+constexpr uint64_t kDefaultCtlConfig = (
+  IPT_CTL_USER_ALLOWED | IPT_CTL_OS_ALLOWED |
+  IPT_CTL_BRANCH_EN |
+  IPT_CTL_TSC_EN);
 
 struct PerfConfig {
   PerfConfig()
-    : num_buffers(kDefaultNumBuffers),
+    : num_cpus(mx_num_cpus()),
+      num_buffers(kDefaultNumBuffers),
       buffer_order(kDefaultBufferOrder),
+      is_circular(kDefaultIsCircular),
       ctl_config(kDefaultCtlConfig)
     { }
+  uint32_t num_cpus;
   size_t num_buffers;
   size_t buffer_order;
   bool is_circular;
@@ -124,24 +131,22 @@ static bool InitPerf(const PerfConfig& config) {
   if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
     return false;
 
-  size_t buffer_size[3] = {
-    config.num_buffers,
-    config.buffer_order,
-    config.is_circular
-  };
-  ssize = ioctl_ipt_set_buffer_size(ipt_fd, buffer_size, sizeof(buffer_size));
-  if (ssize < 0) {
-    util::LogErrorWithMxStatus("set buffer size", ssize);
-    goto Fail;
+  for (uint32_t cpu = 0; cpu < config.num_cpus; ++cpu) {
+    ioctl_ipt_buffer_config_t ipt_config;
+    uint32_t descriptor;
+    memset(&ipt_config, 0, sizeof(ipt_config));
+    ipt_config.num_buffers = config.num_buffers;
+    ipt_config.buffer_order = config.buffer_order;
+    ipt_config.is_circular = config.is_circular;
+    ipt_config.ctl = config.ctl_config;
+    ssize = ioctl_ipt_alloc_buffer(ipt_fd, &ipt_config, &descriptor);
+    if (ssize < 0) {
+      util::LogErrorWithMxStatus("init perf", ssize);
+      goto Fail;
+    }
   }
 
-  ssize = ioctl_ipt_set_ctl_config(ipt_fd, &config.ctl_config);
-  if (ssize < 0) {
-    util::LogErrorWithMxStatus("set CTL config", ssize);
-    goto Fail;
-  }
-
-  ssize = ioctl_ipt_alloc(ipt_fd);
+  ssize = ioctl_ipt_cpu_mode_alloc(ipt_fd);
   if (ssize < 0) {
     util::LogErrorWithMxStatus("init perf", ssize);
     goto Fail;
@@ -192,10 +197,10 @@ static bool StartPerf() {
     goto Fail;
   }
 
-  ssize = ioctl_ipt_start(ipt_fd);
+  ssize = ioctl_ipt_cpu_mode_start(ipt_fd);
   if (ssize < 0) {
     util::LogErrorWithMxStatus("start perf", ssize);
-    ioctl_ipt_free(ipt_fd);
+    ioctl_ipt_cpu_mode_free(ipt_fd);
     goto Fail;
   }
 
@@ -230,7 +235,7 @@ static void StopPerf() {
   if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
     return;
 
-  ssize = ioctl_ipt_stop(ipt_fd);
+  ssize = ioctl_ipt_cpu_mode_stop(ipt_fd);
   if (ssize < 0) {
     // TODO(dje): This is really bad, this shouldn't fail.
     util::LogErrorWithMxStatus("stop perf", ssize);
@@ -246,14 +251,99 @@ static void StopPerf() {
   mx_handle_close(ktrace_handle);
 }
 
+// Subroutine of DumpPerf to simplify it.
+
+static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
+                                uint32_t cpu, const char* output_prefix) {
+  std::string output_path = ftl::StringPrintf("%s.%u.pt", output_prefix, cpu);
+  const char* c_path = output_path.c_str();
+
+  int fd = -1;
+  mx_status_t status = NO_ERROR;
+  size_t bytes_left;
+  char buf[4096];
+
+  ioctl_ipt_buffer_data_t data;
+  ssize_t ssize = ioctl_ipt_get_buffer_data(ipt_fd, &cpu, &data);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus(ftl::StringPrintf("ioctl_ipt_get_buffer_data: cpu %u",
+                                                 cpu),
+                               ssize);
+    goto Fail;
+  }
+
+  fd = open(c_path, O_CREAT | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
+  if (fd < 0) {
+    util::LogErrorWithErrno(ftl::StringPrintf("unable to write file: %s",
+                                              c_path));
+    status = ERR_BAD_PATH;
+    goto Fail;
+  }
+
+  bytes_left = data.capture_size;
+  for (uint32_t i = 0; i < config.num_buffers && bytes_left > 0; ++i) {
+    ioctl_ipt_buffer_handle_rqst_t handle_rqst;
+    handle_rqst.descriptor = cpu;
+    handle_rqst.buffer_num = i;
+    mx_handle_t vmo;
+    ssize = ioctl_ipt_get_buffer_handle(ipt_fd, &handle_rqst, &vmo);
+    if (ssize < 0) {
+      util::LogErrorWithMxStatus(ftl::StringPrintf("ioctl_ipt_get_buffer_handle: cpu %u, buffer %u",
+                                                   cpu, i),
+                                 ssize);
+      goto Fail;
+    }
+
+    // TODO(dje): Should fetch from vmo.
+    size_t buffer_size = (1 << config.buffer_order) * PAGE_SIZE;
+
+    size_t buffer_remaining = buffer_size;
+    size_t offset = 0;
+    while (buffer_remaining && bytes_left) {
+      size_t to_write = sizeof(buf);
+      if (to_write > buffer_remaining)
+        to_write = buffer_remaining;
+      if (to_write > bytes_left)
+        to_write = bytes_left;
+      size_t actual;
+      status = mx_vmo_read(vmo, buf, offset, to_write, &actual);
+      if (status != NO_ERROR) {
+        util::LogErrorWithMxStatus(ftl::StringPrintf("mx_vmo_read: cpu %u, buffer %u, offset %zu",
+                                                     cpu, i, offset),
+                                   status);
+        goto Fail;
+      }
+      if (write(fd, buf, to_write) != (ssize_t) to_write) {
+        util::LogError(ftl::StringPrintf("short write, file: %s\n", c_path));
+        status = ERR_IO;
+        goto Fail;
+      }
+      offset += to_write;
+      buffer_remaining -= to_write;
+      bytes_left -= to_write;
+    }
+  }
+
+  assert(bytes_left == 0);
+  close(fd);
+  fd = -1;
+  status = NO_ERROR;
+
+ Fail:
+  // We don't delete the file on failure on purpose, it is kept for
+  // debugging purposes.
+  if (fd != -1)
+    close(fd);
+  return status;
+}
+
 // Write all output files.
 // This assumes tracing has already been stopped.
 
-static void DumpPerf() {
+static void DumpPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "DumpPerf called";
 
   int ipt_fd, ktrace_fd;
-  ssize_t ssize;
 
   if (!x86::HaveProcessorTrace()) {
     FTL_LOG(INFO) << "PT not supported";
@@ -263,11 +353,15 @@ static void DumpPerf() {
   if (!OpenDevices(&ipt_fd, &ktrace_fd, nullptr))
     return;
 
-  ssize = ioctl_ipt_write_file(ipt_fd, pt_output_path_prefix,
-                               strlen(pt_output_path_prefix));
-  if (ssize < 0) {
-    util::LogErrorWithMxStatus("stop perf", ssize);
+  for (uint32_t cpu = 0; cpu < config.num_cpus; ++cpu) {
+    auto status = WriteCpuData(config, ipt_fd, cpu, pt_output_path_prefix);
+    if (status != NO_ERROR) {
+      util::LogErrorWithMxStatus(ftl::StringPrintf("dump perf of cpu %u", cpu),
+                                 status);
+      // Keep trying to dump other cpu's data.
+    }
   }
+
   close(ipt_fd);
 
   int dest_fd = open(ktrace_output_path, O_CREAT | O_TRUNC | O_RDWR,
@@ -316,7 +410,7 @@ static void ResetPerf() {
   if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
     return;
 
-  ssize = ioctl_ipt_free(ipt_fd);
+  ssize = ioctl_ipt_cpu_mode_free(ipt_fd);
   if (ssize < 0) {
     util::LogErrorWithMxStatus("end perf", ssize);
   }
@@ -437,7 +531,7 @@ static int RunAndDump(const std::vector<std::string>& inferior_argv,
 
   StopPerf();
   if (rc == EXIT_SUCCESS)
-    DumpPerf();
+    DumpPerf(config);
   ResetPerf();
 
   return rc;
@@ -530,7 +624,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (cl.HasOption("dump", nullptr)) {
-    DumpPerf();
+    DumpPerf(config);
     return EXIT_SUCCESS;
   }
 

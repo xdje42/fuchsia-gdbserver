@@ -15,6 +15,9 @@ namespace util {
 // as is.
 const char* basename(const char* s);
 
+// Logs the given |message|.
+void LogError(const std::string& message);
+
 // Logs the given |message| using the global errno variable, including the
 // result of strerror in a nicely formatted way.
 void LogErrorWithErrno(const std::string& message);

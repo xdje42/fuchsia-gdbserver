@@ -27,6 +27,10 @@ const char* basename(const char* s) {
   return s + i;
 }
 
+void LogError(const std::string& message) {
+  FTL_LOG(ERROR) << message;
+}
+
 void LogErrorWithErrno(const std::string& message) {
   FTL_LOG(ERROR) << message << " (errno = " << errno << ", \""
                  << strerror(errno) << "\")";
