@@ -178,7 +178,6 @@ static void run_command(const util::Argv& argv, const CommandEnvironment& env) {
     env.Print("Failed to attach to process\n");
     return;
   }
-
   FTL_DCHECK(process->IsAttached());
 
   // On Linux, the program is considered "live" after vRun, e.g. $pc is set. On

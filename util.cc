@@ -132,6 +132,10 @@ std::string EscapeNonPrintableString(const ftl::StringView& data) {
   return result;
 }
 
+void LogError(const std::string& message) {
+  FTL_LOG(ERROR) << message;
+}
+
 void LogErrorWithErrno(const std::string& message) {
   FTL_LOG(ERROR) << message << " (errno = " << errno << ", \""
                  << strerror(errno) << "\")";

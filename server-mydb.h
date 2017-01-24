@@ -53,10 +53,6 @@ class MydbServer final : public Server {
   void OnDisconnected() override;
   void OnIOError() override;
 
-  // Print an exception in user-friendly form.
-  void PrintException(Process*, Thread*, mx_excp_type_t type,
-                      const mx_exception_context_t& context);
-
   // Process::Delegate overrides.
   void OnThreadStarted(Process* process,
                        Thread* thread,

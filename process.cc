@@ -34,9 +34,10 @@ bool SetupLaunchpad(launchpad_t** out_lp, const util::Argv& argv) {
   const char* c_args[argv.size()];
   for (size_t i = 0; i < argv.size(); ++i)
     c_args[i] = argv[i].c_str();
+  const char* name = util::basename(c_args[0]);
 
   launchpad_t* lp = nullptr;
-  mx_status_t status = launchpad_create(0u, c_args[0], &lp);
+  mx_status_t status = launchpad_create(0u, name, &lp);
   if (status != NO_ERROR)
     goto fail;
 

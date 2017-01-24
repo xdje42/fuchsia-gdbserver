@@ -71,10 +71,6 @@ int main(int argc, char* argv[]) {
 
   FTL_LOG(INFO) << "Starting mydb.";
 
-  if (cl.HasOption("test-pt", nullptr)) {
-    debugserver::arch::StartPerf();
-  }
-
   debugserver::MydbServer mydb;
 
   std::vector<std::string> inferior_argv(cl.positional_args().begin(),
@@ -84,11 +80,6 @@ int main(int argc, char* argv[]) {
   mydb.set_current_process(inferior);
 
   auto status = mydb.Run();
-
-  if (cl.HasOption("test-pt", nullptr)) {
-    debugserver::arch::StopPerf();
-    debugserver::arch::DumpPerf();
-  }
 
   if (!status) {
     FTL_LOG(ERROR) << "Mydb exited with error";

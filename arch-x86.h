@@ -7,8 +7,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 // x86 architectural values
 
 namespace debugserver {

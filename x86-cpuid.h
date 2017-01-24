@@ -88,6 +88,7 @@ static inline const struct cpuid_leaf *x86_get_cpuid_leaf(enum x86_cpuid_leaf_nu
         return &_cpuid_ext[(uint32_t)leaf - (uint32_t)X86_CPUID_EXT_BASE];
     }
 }
+
 /* Retrieve the specified subleaf.  This function is not cached.
  * Returns false if leaf num is invalid */
 bool x86_get_cpuid_subleaf(

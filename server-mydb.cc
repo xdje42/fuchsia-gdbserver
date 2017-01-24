@@ -113,9 +113,10 @@ void MydbServer::OnIOError() {
 }
 
 void MydbServer::OnThreadStarted(Process* process,
-                             Thread* thread,
-                             const mx_exception_context_t& context) {
+                                 Thread* thread,
+                                 const mx_exception_context_t& context) {
   FTL_DCHECK(process);
+  FTL_DCHECK(thread);
 
   PrintException(process, thread, MX_EXCP_START, context);
 
@@ -129,9 +130,9 @@ void MydbServer::OnThreadStarted(Process* process,
 }
 
 void MydbServer::OnProcessOrThreadExited(Process* process,
-                                     Thread* thread,
-                                     const mx_excp_type_t type,
-                                     const mx_exception_context_t& context) {
+                                         Thread* thread,
+                                         const mx_excp_type_t type,
+                                         const mx_exception_context_t& context) {
   // If the process is gone, unset current thread.
   if (!thread)
     SetCurrentThread(nullptr);
@@ -139,41 +140,15 @@ void MydbServer::OnProcessOrThreadExited(Process* process,
 }
 
 void MydbServer::OnArchitecturalException(Process* process,
-                                      Thread* thread,
-                                      const mx_excp_type_t type,
-                                      const mx_exception_context_t& context) {
+                                          Thread* thread,
+                                          const mx_excp_type_t type,
+                                          const mx_exception_context_t& context) {
   FTL_DCHECK(process);
   FTL_DCHECK(thread);
   // TODO(armansito): Fine-tune this check if we ever support multi-processing.
   FTL_DCHECK(process == current_process());
 
   PrintException(process, thread, type, context);
-}
-
-void MydbServer::PrintException(Process* process, Thread* thread,
-                                mx_excp_type_t type,
-                                const mx_exception_context_t& context) {
-  if (MX_EXCP_IS_ARCH(type)) {
-    printf("Thread %s received exception %s\n",
-           thread->GetDebugName().c_str(),
-           util::ExceptionToString(type, context).c_str());
-    printf("PC 0x%" PRIxPTR "\n", context.arch.pc);
-  } else {
-    switch (type) {
-    case MX_EXCP_START:
-      printf("Thread %s started\n", thread->GetDebugName().c_str());
-      break;
-    case MX_EXCP_GONE:
-      if (thread)
-        printf("Thread %s exited\n", thread->GetDebugName().c_str());
-      else
-        printf("Process %s exited, rc %d\n",
-               process->GetName().c_str(), process->ExitCode());
-      break;
-    default:
-      break;
-    }
-  }
 }
 
 }  // namespace debugserver

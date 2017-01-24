@@ -13,30 +13,43 @@ namespace debugserver {
 namespace arch {
 namespace x86 {
 
-struct processor_trace_features {
+struct ProcessorTraceFeatures {
+  bool initialized;
   bool have_pt;
+
+  bool cr3_match;
+  bool cycle_accurate_mode;
+  bool ip_filtering;
+  bool mtc;
+  bool ptwrite;
+  bool power_events;
+
+  uint32_t addr_cfg_max;
+  bool supports_filter_ranges;
+  bool supports_stop_ranges;
+  uint32_t num_addr_ranges;
+
+  uint32_t mtc_freq_mask;
+  uint32_t cycle_thresh_mask;
+  uint32_t psb_freq_mask;
+
   bool to_pa;
   bool multiple_to_pa_entries;
   bool single_range;
   bool trace_transport_output;
   bool payloads_are_lip;
-  bool cycle_accurate_mode;
-  bool filtering_stop_mtc;
-  bool cr3_match;
-  uint32_t num_addr_ranges;
-  bool supports_filter_ranges;
-  bool supports_stop_ranges;
-  uint32_t cycle_thresh_mask;
-  uint32_t psb_freq_mask;
-  uint32_t mtc_freq_mask;
+
   uint32_t tsc_ratio_num, tsc_ratio_den;
   float bus_freq;
 };
 
-void get_processor_trace_features(processor_trace_features *pt);
+bool HaveProcessorTrace();
 
-// TODO(dje): Switch to iostreams later.
-void dump_processor_trace_features(FILE* out, processor_trace_features *pt);
+// WARNING: Until the first call completes this is not thread safe.
+const ProcessorTraceFeatures* GetProcessorTraceFeatures();
+
+// TODO(dje): iostreams. later.
+void DumpProcessorTraceFeatures(FILE* out, const ProcessorTraceFeatures *pt);
 
 }  // namespace x86
 }  // namespace arch

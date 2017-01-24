@@ -21,6 +21,7 @@
 namespace debugserver {
 
 class Process;
+class Thread;
 
 // Maintains a dedicated thread for listening to exceptions from multiple
 // processes and provides an interface that processes can use to subscribe to
@@ -102,5 +103,10 @@ class ExceptionPort final {
 
   FTL_DISALLOW_COPY_AND_ASSIGN(ExceptionPort);
 };
+
+// Print an exception in user-friendly form.
+// This doesn't have a better place at the moment.
+void PrintException(Process* process, Thread* thread, mx_excp_type_t type,
+                    const mx_exception_context_t& context);
 
 }  // namespace debugserver

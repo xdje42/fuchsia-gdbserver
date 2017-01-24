@@ -4,6 +4,7 @@
 
 #include "exception-port.h"
 
+#include <cinttypes>
 #include <string>
 
 #include <magenta/syscalls.h>
@@ -208,6 +209,33 @@ void ExceptionPort::Worker() {
   {
     lock_guard<mutex> lock(eport_mutex_);
     eport_handle_.reset();
+  }
+}
+
+// This doesn't have a better place at the moment.
+
+void PrintException(Process* process, Thread* thread, mx_excp_type_t type,
+                    const mx_exception_context_t& context) {
+  if (MX_EXCP_IS_ARCH(type)) {
+    printf("Thread %s received exception %s\n",
+           thread->GetDebugName().c_str(),
+           util::ExceptionToString(type, context).c_str());
+    printf("PC 0x%" PRIxPTR "\n", context.arch.pc);
+  } else {
+    switch (type) {
+    case MX_EXCP_START:
+      printf("Thread %s started\n", thread->GetDebugName().c_str());
+      break;
+    case MX_EXCP_GONE:
+      if (thread)
+        printf("Thread %s exited\n", thread->GetDebugName().c_str());
+      else
+        printf("Process %s exited, rc %d\n",
+               process->GetName().c_str(), process->ExitCode());
+      break;
+    default:
+      break;
+    }
   }
 }
 

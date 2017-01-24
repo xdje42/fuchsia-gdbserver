@@ -51,6 +51,9 @@ std::vector<uint8_t> DecodeByteArrayString(const ftl::StringView& string);
 // Same as DecodeByteArrayString but return a string.
 std::string DecodeString(const ftl::StringView& string);
 
+// Logs the given |message|.
+void LogError(const std::string& message);
+
 // Logs the given |message| using the global errno variable, including the
 // result of strerror in a nicely formatted way.
 void LogErrorWithErrno(const std::string& message);

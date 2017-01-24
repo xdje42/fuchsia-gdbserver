@@ -4,6 +4,8 @@
 
 // TODO(dje): wip wip wip
 
+#include "ipt-ctrl.h"
+
 #include <cinttypes>
 #include <fcntl.h>
 #include <link.h>
@@ -13,7 +15,6 @@
 
 #include <iostream>
 
-#include <launchpad/launchpad.h>
 #include <magenta/device/intel-pt.h>
 #include <magenta/device/ktrace.h>
 #include <magenta/ktrace.h>
@@ -21,14 +22,16 @@
 
 #include <mxio/util.h>
 
-#include "lib/ftl/command_line.h"
-#include "lib/ftl/log_settings.h"
 #include "lib/ftl/logging.h"
 #include "lib/ftl/strings/string_printf.h"
-#include "lib/ftl/strings/string_number_conversions.h"
 
+#include "arch.h"
+#include "arch-x86.h"
+#include "server-ipt.h"
 #include "util.h"
 #include "x86-pt.h"
+
+namespace debugserver {
 
 static constexpr char ipt_device_path[] = "/dev/misc/intel-pt";
 static constexpr char ktrace_device_path[] = "/dev/misc/ktrace";
@@ -36,33 +39,7 @@ static constexpr char ktrace_device_path[] = "/dev/misc/ktrace";
 static constexpr char pt_output_path_prefix[] = "/tmp/ptout";
 static constexpr char ktrace_output_path[] = "/tmp/ptout.ktrace";
 
-static constexpr char ldso_trace_env_var[] = "LD_TRACE_FILE";
-static constexpr char ldso_trace_output_path[] = "/tmp/ptout.ldso";
-
 static constexpr char cpuid_output_path[] = "/tmp/ptout.cpuid";
-
-constexpr size_t kDefaultNumBuffers = 16;
-constexpr size_t kDefaultBufferOrder = 2;  // 16kb
-constexpr bool kDefaultIsCircular = false;
-constexpr uint64_t kDefaultCtlConfig = (
-  IPT_CTL_OS_ALLOWED | IPT_CTL_USER_ALLOWED |
-  IPT_CTL_BRANCH_EN |
-  IPT_CTL_TSC_EN);
-
-struct PerfConfig {
-  PerfConfig()
-    : num_cpus(mx_num_cpus()),
-      num_buffers(kDefaultNumBuffers),
-      buffer_order(kDefaultBufferOrder),
-      is_circular(kDefaultIsCircular),
-      ctl_config(kDefaultCtlConfig)
-    { }
-  uint32_t num_cpus;
-  size_t num_buffers;
-  size_t buffer_order;
-  bool is_circular;
-  uint64_t ctl_config;
-};
 
 static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
                         mx_handle_t* out_ktrace_handle) {
@@ -109,21 +86,14 @@ static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
   return true;
 }
 
-static void DumpArch(FILE* out) {
-  if (x86::HaveProcessorTrace()) {
-    const x86::ProcessorTraceFeatures* pt = x86::GetProcessorTraceFeatures();
-    x86::DumpProcessorTraceFeatures(out, pt);
-  }
-}
-
-static bool InitPerf(const PerfConfig& config) {
+bool InitPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "InitPerf called";
 
   int ipt_fd;
   mx_handle_t ktrace_handle;
   ssize_t ssize;
 
-  if (!x86::HaveProcessorTrace()) {
+  if (!arch::x86::HaveProcessorTrace()) {
     FTL_LOG(INFO) << "PT not supported";
     return false;
   }
@@ -164,7 +134,7 @@ static bool InitPerf(const PerfConfig& config) {
   return false;
 }
 
-static bool StartPerf() {
+bool StartPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "StartPerf called";
 
   int ipt_fd;
@@ -172,7 +142,7 @@ static bool StartPerf() {
   ssize_t ssize;
   mx_status_t status;
 
-  if (!x86::HaveProcessorTrace()) {
+  if (!arch::x86::HaveProcessorTrace()) {
     FTL_LOG(INFO) << "PT not supported";
     return false;
   }
@@ -221,7 +191,7 @@ static bool StartPerf() {
   return false;
 }
 
-static void StopPerf() {
+void StopPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "StopPerf called";
 
   int ipt_fd;
@@ -229,7 +199,7 @@ static void StopPerf() {
   ssize_t ssize;
   mx_status_t status;
 
-  if (!x86::HaveProcessorTrace()) {
+  if (!arch::x86::HaveProcessorTrace()) {
     FTL_LOG(INFO) << "PT not supported";
     return;
   }
@@ -344,12 +314,12 @@ static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
 // Write all output files.
 // This assumes tracing has already been stopped.
 
-static void DumpPerf(const PerfConfig& config) {
+void DumpPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "DumpPerf called";
 
   int ipt_fd, ktrace_fd;
 
-  if (!x86::HaveProcessorTrace()) {
+  if (!arch::x86::HaveProcessorTrace()) {
     FTL_LOG(INFO) << "PT not supported";
     return;
   }
@@ -387,7 +357,7 @@ static void DumpPerf(const PerfConfig& config) {
 
   FILE* f = fopen(cpuid_output_path, "w");
   if (f != nullptr) {
-    DumpArch(f);
+    arch::DumpArch(f);
     fclose(f);
   } else {
     FTL_LOG(ERROR) << "unable to write PT config to " << cpuid_output_path;
@@ -399,14 +369,14 @@ static void DumpPerf(const PerfConfig& config) {
 // resources.
 // This assumes tracing has already been stopped.
 
-static void ResetPerf() {
+void ResetPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "ResetPerf called";
 
   int ipt_fd;
   mx_handle_t ktrace_handle;
   ssize_t ssize;
 
-  if (!x86::HaveProcessorTrace()) {
+  if (!arch::x86::HaveProcessorTrace()) {
     FTL_LOG(INFO) << "PT not supported";
     return;
   }
@@ -428,214 +398,4 @@ static void ResetPerf() {
   mx_handle_close(ktrace_handle);
 }
 
-constexpr char kUsageString[] =
-    "Usage: pt-ctrl [options] program [args...]\n"
-    "\n"
-    "  program - the path to the executable to run\n"
-    "\n"
-    "Options:\n"
-    "  --dump-arch        print random facts about the architecture and exit\n"
-    "  --help             show this help message\n"
-    "  --quiet[=level]    set quietness level (opposite of verbose)\n"
-    "  --verbose[=level]  set debug verbosity level\n"
-    "  --num-buffers=N    set number of buffers\n"
-    "                     The default is 16.\n"
-    "  --buffer-order=N   set buffer size, in pages, as a power of 2\n"
-    "                     The default is 2: 16KB buffers.\n"
-    "  --circular         use a circular trace buffer\n"
-    "                     Otherwise tracing stops when the buffer fills.\n"
-    "  --ctl-config=BITS  set user-settable bits in CTL MSR\n"
-    "                     See Intel docs on IA32_RTIT_CTL MSR.\n"
-    "\n"
-    "Options for controlling steps in process:\n"
-    "Only the first one seen is processed.\n"
-    "These cannot be specified with a program to run.\n"
-    "\n"
-    "  --init             allocate PT resources (buffers) and exit\n"
-    "  --start            turn on PT and exit\n"
-    "  --stop             turn off PT and exit\n"
-    "  --dump             dump PT data and exit\n"
-    "  --reset            reset PT (release all resources) and exit\n"
-    "\n"
-    "--verbose=<level> : sets |min_log_level| to -level\n"
-    "--quiet=<level>   : sets |min_log_level| to +level\n"
-    "Quiet supersedes verbose if both are specified.\n"
-    "Defined log levels:\n"
-    "-n - verbosity level n\n"
-    " 0 - INFO - this is the default level\n"
-    " 1 - WARNING\n"
-    " 2 - ERROR\n"
-    " 3 - FATAL\n"
-    "Note that negative log levels mean more verbosity.\n";
-
-static void PrintUsageString() {
-  std::cout << kUsageString << std::endl;
-}
-
-static int RunAndDump(const std::vector<std::string>& inferior_argv,
-                      PerfConfig& config) {
-  if (inferior_argv.size() == 0) {
-    FTL_LOG(ERROR) << "Missing program";
-    return EXIT_FAILURE;
-  }
-
-  const char* c_args[inferior_argv.size()];
-  for (size_t i = 0; i < inferior_argv.size(); ++i)
-    c_args[i] = inferior_argv[i].c_str();
-  const char* name = util::basename(c_args[0]);
-
-  // We need details of where the program and its dsos are loaded.
-  // This data is obtained from the dynamic linker.
-  // TODO(dje): Is there a better way?
-  setenv(ldso_trace_env_var, ldso_trace_output_path, 1);
-
-  FTL_LOG(INFO) << "Starting program: " << inferior_argv[0];
-
-  if (!InitPerf(config))
-    return EXIT_FAILURE;
-
-  // Defer turning on tracing as long as possible so that we don't include
-  // all the initialization.
-  if (!StartPerf()) {
-    ResetPerf();
-    return EXIT_FAILURE;
-  }
-
-  int rc = EXIT_SUCCESS;
-
-  // N.B. It's important that the PT device be closed at this point as we
-  // don't want the inferior to inherit the open descriptor: the device can
-  // only be opened once at a time.
-
-  mx_handle_t inferior =
-    launchpad_launch_mxio(name, inferior_argv.size(), c_args);
-  if (inferior > 0) {
-    mx_signals_t signals = MX_SIGNAL_SIGNALED;
-    mx_signals_t pending;
-    int64_t timeout = MX_TIME_INFINITE;
-    mx_status_t status = mx_handle_wait_one(inferior, signals, timeout,
-                                            &pending);
-    if (status != NO_ERROR) {
-      util::LogErrorWithMxStatus("mx_handle_wait_one failed", status);
-    }
-
-    mx_info_process_t info;
-    if ((status = mx_object_get_info(inferior, MX_INFO_PROCESS, &info,
-                                     sizeof(info), NULL, NULL)) == NO_ERROR) {
-      printf("Process exited with code %d\n", info.return_code);
-    } else {
-      util::LogErrorWithMxStatus("mx_object_get_info failed", status);
-    }
-
-    mx_handle_close(inferior);
-  } else {
-    util::LogErrorWithMxStatus("error starting process", inferior);
-    rc = EXIT_FAILURE;
-  }
-
-  StopPerf();
-  if (rc == EXIT_SUCCESS)
-    DumpPerf(config);
-  ResetPerf();
-
-  return rc;
-}
-
-int main(int argc, char* argv[]) {
-  ftl::CommandLine cl = ftl::CommandLineFromArgcArgv(argc, argv);
-
-  if (cl.HasOption("help", nullptr)) {
-    PrintUsageString();
-    return EXIT_SUCCESS;
-  }
-
-  if (!ftl::SetLogSettingsFromCommandLine(cl))
-    return EXIT_FAILURE;
-
-  if (cl.HasOption("dump-arch", nullptr)) {
-    DumpArch(stdout);
-    return EXIT_SUCCESS;
-  }
-
-  PerfConfig config;
-  std::string arg;
-
-  if (cl.GetOptionValue("num-buffers", &arg)) {
-    size_t num_buffers;
-    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
-                                              &num_buffers)) {
-      FTL_LOG(ERROR) << "Not a valid buffer size: " << arg;
-      return EXIT_FAILURE;
-    }
-    config.num_buffers = num_buffers;
-  }
-
-  if (cl.GetOptionValue("buffer-order", &arg)) {
-    size_t buffer_order;
-    if (!ftl::StringToNumberWithError<size_t>(ftl::StringView(arg),
-                                              &buffer_order)) {
-      FTL_LOG(ERROR) << "Not a valid buffer order: " << arg;
-      return EXIT_FAILURE;
-    }
-    config.buffer_order = buffer_order;
-  }
-
-  if (cl.HasOption("circular", nullptr)) {
-    config.is_circular = true;
-  }
-
-  if (cl.GetOptionValue("ctl-config", &arg)) {
-    uint64_t ctl_config;
-    if (!ftl::StringToNumberWithError<uint64_t>(ftl::StringView(arg),
-                                              &ctl_config, ftl::Base::k16)) {
-      FTL_LOG(ERROR) << "Not a valid CTL config value: " << arg;
-      return EXIT_FAILURE;
-    }
-    config.ctl_config = ctl_config;
-  }
-
-  std::vector<std::string> inferior_argv(cl.positional_args().begin(),
-                                         cl.positional_args().end());
-
-  if (cl.HasOption("init", nullptr) ||
-      cl.HasOption("start", nullptr) ||
-      cl.HasOption("stop", nullptr) ||
-      cl.HasOption("dump", nullptr) ||
-      cl.HasOption("reset", nullptr)) {
-    if (inferior_argv.size() != 0) {
-      FTL_LOG(ERROR) << "Program cannot be specified";
-      return EXIT_FAILURE;
-    }
-  }
-
-  if (cl.HasOption("init", nullptr)) {
-    if (!InitPerf(config))
-      return EXIT_FAILURE;
-    return EXIT_SUCCESS;
-  }
-
-  if (cl.HasOption("start", nullptr)) {
-    if (!StartPerf()) {
-      FTL_LOG(WARNING) << "Start failed, but buffers not removed";
-      return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
-  }
-
-  if (cl.HasOption("stop", nullptr)) {
-    StopPerf();
-    return EXIT_SUCCESS;
-  }
-
-  if (cl.HasOption("dump", nullptr)) {
-    DumpPerf(config);
-    return EXIT_SUCCESS;
-  }
-
-  if (cl.HasOption("reset", nullptr)) {
-    ResetPerf();
-    return EXIT_SUCCESS;
-  }
-
-  return RunAndDump(inferior_argv, config);
-}
+} // debugserver namespace

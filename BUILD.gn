@@ -120,6 +120,31 @@ executable("mydb") {
   ]
 }
 
+executable("ipt") {
+  output_name = "ipt"
+
+  sources = common_sources
+  sources += arch_sources
+
+  sources += [
+    "main-ipt.cc",
+    "ipt-ctrl.cc",
+    "ipt-ctrl.h",
+    "server-ipt.cc",
+    "server-ipt.h",
+  ]
+
+  deps = [
+    "//lib/ftl",
+    "//lib/mtl",
+  ]
+
+  libs = [
+    "launchpad",
+    "magenta",
+  ]
+}
+
 group("tests") {
   testonly = true
 
@@ -152,11 +177,5 @@ executable("gdbserver-unittests") {
 
   libs = [
     "magenta",
-  ]
-}
-
-group("ipt") {
-  deps = [
-    "intel-pt:ipt"
   ]
 }

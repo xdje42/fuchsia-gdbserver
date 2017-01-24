@@ -10,10 +10,10 @@
 
 #include "x86-cpuid.h"
 
+#include <atomic>
 #include <cpuid.h>
 #include <cstdint>
 #include <cstring>
-#include <stdatomic.h> // TODO(dje)
 
 namespace debugserver {
 namespace arch {
@@ -33,13 +33,12 @@ enum x86_vendor_list x86_vendor;
 
 static struct x86_model_info model_info;
 
-static atomic_bool initialized = ATOMIC_VAR_INIT(false);
+static std::atomic_bool initialized;
 
 void x86_feature_init(void)
 {
-    if (atomic_exchange(&initialized, true)) {
+    if (atomic_exchange(&initialized, true))
         return;
-    }
 
     /* test for cpuid count */
     __cpuid(0, _cpuid[0].a, _cpuid[0].b, _cpuid[0].c, _cpuid[0].d);
