@@ -35,20 +35,21 @@ bool IptServer::StartInferior() {
 
   FTL_LOG(INFO) << "Starting program: " << argv[0];
 
+  if (!SetPerfMode(config_))
+    return false;
+
   // We need details of where the program and its dsos are loaded.
   // This data is obtained from the dynamic linker.
   // TODO(dje): Is there a better way?
   setenv(ldso_trace_env_var, ldso_trace_output_path, 1);
 
-  if (!InitPerf(config_))
-    return false;
-
-  // If tracing cpus, defer turning on tracing as long as possible so that we
-  // don't include all the initialization. For threads it doesn't matter.
-  if (!StartPerf(config_)) {
-    ResetPerf(config_);
-    return false;
+  if (config_.mode == IPT_MODE_CPUS) {
+    if (!InitCpuPerf(config_))
+      return false;
   }
+
+  if (!InitPerfPreProcess(config_))
+    return false;
 
   // N.B. It's important that the PT device be closed at this point as we
   // don't want the inferior to inherit the open descriptor: the device can
@@ -66,6 +67,16 @@ bool IptServer::StartInferior() {
   }
   FTL_DCHECK(process->IsAttached());
 
+  // If tracing cpus, defer turning on tracing as long as possible so that we
+  // don't include all the initialization. For threads it doesn't matter.
+  // TODO(dje): Could even defer until the first thread is started.
+  if (config_.mode == IPT_MODE_CPUS) {
+    if (!StartCpuPerf(config_)) {
+      ResetPerf(config_);
+      return false;
+    }
+  }
+
   FTL_DCHECK(!process->started());
   if (!process->Start()) {
     util::LogError("failed to start process");
@@ -77,8 +88,13 @@ bool IptServer::StartInferior() {
 }
 
 bool IptServer::DumpResults() {
+  if (config_.mode == IPT_MODE_CPUS)
+    StopCpuPerf(config_);
   StopPerf(config_);
-  DumpPerf(config_);
+  if (config_.mode == IPT_MODE_CPUS)
+    DumpCpuPerf(config_);
+  if (config_.mode == IPT_MODE_CPUS)
+    ResetCpuPerf(config_);
   ResetPerf(config_);
   return true;
 }
@@ -141,9 +157,14 @@ void IptServer::OnThreadStarted(Process* process,
   }
 
   if (config_.mode == IPT_MODE_THREADS) {
+    if (!InitThreadPerf(thread, config_))
+      goto Fail;
+    if (!StartThreadPerf(thread, config_))
+      goto Fail;
     // xyzdje
   }
 
+ Fail:
   thread->Resume();
 }
 
@@ -158,6 +179,9 @@ void IptServer::OnProcessOrThreadExited(Process* process,
   if (thread) {
     // Dump any collected trace.
     // xyzdje
+    StopThreadPerf(thread, config_);
+    DumpThreadPerf(thread, config_);
+    ResetThreadPerf(thread, config_);
   } else {
     // If the process is gone, unset current thread, and exit main loop.
     SetCurrentThread(nullptr);

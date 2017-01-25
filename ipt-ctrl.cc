@@ -86,20 +86,36 @@ static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
   return true;
 }
 
-bool InitPerf(const PerfConfig& config) {
-  FTL_LOG(INFO) << "InitPerf called";
-
+bool SetPerfMode(const PerfConfig& config) {
   int ipt_fd;
-  mx_handle_t ktrace_handle;
-  ssize_t ssize;
 
-  if (!arch::x86::HaveProcessorTrace()) {
-    FTL_LOG(INFO) << "PT not supported";
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
     return false;
+
+  uint32_t mode = config.mode;
+  ssize_t ssize = ioctl_ipt_set_mode(ipt_fd, &mode);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("set perf mode", ssize);
+    goto Fail;
   }
 
-  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
+  close(ipt_fd);
+  return true;
+
+ Fail:
+  close(ipt_fd);
+  return false;
+}
+
+bool InitCpuPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "InitCpuPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_CPUS);
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
     return false;
+
+  ssize_t ssize;
 
   for (uint32_t cpu = 0; cpu < config.num_cpus; ++cpu) {
     ioctl_ipt_buffer_config_t ipt_config;
@@ -111,7 +127,7 @@ bool InitPerf(const PerfConfig& config) {
     ipt_config.ctl = config.ctl_config;
     ssize = ioctl_ipt_alloc_buffer(ipt_fd, &ipt_config, &descriptor);
     if (ssize < 0) {
-      util::LogErrorWithMxStatus("init perf", ssize);
+      util::LogErrorWithMxStatus("init cpu perf", ssize);
       goto Fail;
     }
     // Buffers are automagically assigned to cpus, descriptor == cpu#,
@@ -125,29 +141,51 @@ bool InitPerf(const PerfConfig& config) {
   }
 
   close(ipt_fd);
-  mx_handle_close(ktrace_handle);
   return true;
 
  Fail:
   close(ipt_fd);
-  mx_handle_close(ktrace_handle);
   return false;
 }
 
-bool StartPerf(const PerfConfig& config) {
-  FTL_LOG(INFO) << "StartPerf called";
+bool InitThreadPerf(Thread* thread, const PerfConfig& config) {
+  FTL_LOG(INFO) << "InitThreadPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_THREADS);
 
   int ipt_fd;
-  mx_handle_t ktrace_handle;
-  ssize_t ssize;
-  mx_status_t status;
-
-  if (!arch::x86::HaveProcessorTrace()) {
-    FTL_LOG(INFO) << "PT not supported";
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
     return false;
+
+  ioctl_ipt_buffer_config_t ipt_config;
+  uint32_t descriptor;
+  memset(&ipt_config, 0, sizeof(ipt_config));
+  ipt_config.num_buffers = config.num_buffers;
+  ipt_config.buffer_order = config.buffer_order;
+  ipt_config.is_circular = config.is_circular;
+  ipt_config.ctl = config.ctl_config;
+  ssize_t ssize = ioctl_ipt_alloc_buffer(ipt_fd, &ipt_config, &descriptor);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("init thread perf", ssize);
+    goto Fail;
   }
 
-  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
+  thread->set_ipt_buffer(descriptor);
+  return true;
+
+ Fail:
+  return false;
+}
+
+// This must be called before a process is started so we emit a ktrace
+// process start record for it.
+
+bool InitPerfPreProcess(const PerfConfig& config) {
+  FTL_LOG(INFO) << "InitPerfPreProcess called";
+
+  mx_handle_t ktrace_handle;
+  mx_status_t status;
+
+  if (!OpenDevices(nullptr, nullptr, &ktrace_handle))
     return false;
 
   status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
@@ -169,15 +207,6 @@ bool StartPerf(const PerfConfig& config) {
     goto Fail;
   }
 
-  ssize = ioctl_ipt_cpu_mode_start(ipt_fd);
-  if (ssize < 0) {
-    util::LogErrorWithMxStatus("start perf", ssize);
-    ioctl_ipt_cpu_mode_free(ipt_fd);
-    goto Fail;
-  }
-
-  close(ipt_fd);
-  mx_handle_close(ktrace_handle);
   return true;
 
  Fail:
@@ -187,43 +216,105 @@ bool StartPerf(const PerfConfig& config) {
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
 
   mx_handle_close(ktrace_handle);
+  return false;
+}
+
+bool StartCpuPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "StartCpuPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_CPUS);
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return false;
+
+  ssize_t ssize = ioctl_ipt_cpu_mode_start(ipt_fd);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("start cpu perf", ssize);
+    ioctl_ipt_cpu_mode_free(ipt_fd);
+    goto Fail;
+  }
+
+  close(ipt_fd);
+  return true;
+
+ Fail:
+
   close(ipt_fd);
   return false;
+}
+
+bool StartThreadPerf(Thread* thread, const PerfConfig& config) {
+  FTL_LOG(INFO) << "StartThreadPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_THREADS);
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return false;
+
+  if (thread->ipt_buffer() < 0) {
+    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
+                                       thread->id());
+    // TODO(dje): For now. This isn't an error in the normal sense.
+    return true;
+  }
+
+  ioctl_ipt_assign_buffer_thread_t assign;
+  assign.thread = thread->handle();
+  assign.descriptor = thread->ipt_buffer();
+  ssize_t ssize = ioctl_ipt_assign_buffer_thread(ipt_fd, &assign);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("assigning ipt buffer to thread", ssize);
+    goto Fail;
+  }
+
+  close(ipt_fd);
+  return true;
+
+ Fail:
+  close(ipt_fd);
+  return false;
+}
+
+void StopCpuPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "StopCpuPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_CPUS);
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return;
+
+  ssize_t ssize = ioctl_ipt_cpu_mode_stop(ipt_fd);
+  if (ssize < 0) {
+    // TODO(dje): This is really bad, this shouldn't fail.
+    util::LogErrorWithMxStatus("stop cpu perf", ssize);
+  }
+
+  close(ipt_fd);
+}
+
+void StopThreadPerf(Thread* thread, const PerfConfig& config) {
+  FTL_LOG(INFO) << "StopThreadPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_THREADS);
 }
 
 void StopPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "StopPerf called";
 
-  int ipt_fd;
   mx_handle_t ktrace_handle;
-  ssize_t ssize;
-  mx_status_t status;
-
-  if (!arch::x86::HaveProcessorTrace()) {
-    FTL_LOG(INFO) << "PT not supported";
-    return;
-  }
-
-  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
+  if (!OpenDevices(nullptr, nullptr, &ktrace_handle))
     return;
 
-  ssize = ioctl_ipt_cpu_mode_stop(ipt_fd);
-  if (ssize < 0) {
-    // TODO(dje): This is really bad, this shouldn't fail.
-    util::LogErrorWithMxStatus("stop perf", ssize);
-  }
-
-  status = mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
+  mx_status_t status =
+    mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
   if (status != NO_ERROR) {
     // TODO(dje): This shouldn't fail either, should it?
     util::LogErrorWithMxStatus("stop ktrace", status);
   }
 
-  close(ipt_fd);
   mx_handle_close(ktrace_handle);
 }
 
-// Subroutine of DumpPerf to simplify it.
+// Subroutine of DumpCpuPerf to simplify it.
 
 static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
                                 uint32_t cpu, const char* output_prefix) {
@@ -314,16 +405,10 @@ static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
 // Write all output files.
 // This assumes tracing has already been stopped.
 
-void DumpPerf(const PerfConfig& config) {
-  FTL_LOG(INFO) << "DumpPerf called";
+void DumpCpuPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "DumpCpuPerf called";
 
   int ipt_fd, ktrace_fd;
-
-  if (!arch::x86::HaveProcessorTrace()) {
-    FTL_LOG(INFO) << "PT not supported";
-    return;
-  }
-
   if (!OpenDevices(&ipt_fd, &ktrace_fd, nullptr))
     return;
 
@@ -364,37 +449,98 @@ void DumpPerf(const PerfConfig& config) {
   }
 }
 
-// Reset perf collection to its original state.
-// This means restoring ktrace to its original state, and freeing all PT
-// resources.
-// This assumes tracing has already been stopped.
-
-void ResetPerf(const PerfConfig& config) {
-  FTL_LOG(INFO) << "ResetPerf called";
+void DumpThreadPerf(Thread* thread, const PerfConfig& config) {
+  FTL_LOG(INFO) << "DumpThreadPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_THREADS);
 
   int ipt_fd;
-  mx_handle_t ktrace_handle;
-  ssize_t ssize;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return;
 
-  if (!arch::x86::HaveProcessorTrace()) {
-    FTL_LOG(INFO) << "PT not supported";
+  if (thread->ipt_buffer() < 0) {
+    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
+                                       thread->id());
+    // TODO(dje): For now. This isn't an error in the normal sense.
     return;
   }
 
-  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
+  ioctl_ipt_assign_buffer_thread_t assign;
+  assign.thread = thread->handle();
+  assign.descriptor = thread->ipt_buffer();
+  ssize_t ssize = ioctl_ipt_assign_buffer_thread(ipt_fd, &assign);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("assigning ipt buffer to thread", ssize);
+    goto Fail;
+  }
+
+ Fail:
+  close(ipt_fd);
+}
+
+// Reset perf collection to its original state.
+// This means freeing all PT resources.
+// This assumes tracing has already been stopped.
+
+void ResetCpuPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "ResetCpuPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_CPUS);
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
     return;
 
-  ssize = ioctl_ipt_cpu_mode_free(ipt_fd);
+  ssize_t ssize = ioctl_ipt_cpu_mode_free(ipt_fd);
   if (ssize < 0) {
     util::LogErrorWithMxStatus("end perf", ssize);
   }
 
   close(ipt_fd);
+}
+
+void ResetThreadPerf(Thread* thread, const PerfConfig& config) {
+  FTL_LOG(INFO) << "ResetThreadPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_THREADS);
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return;
+
+  if (thread->ipt_buffer() < 0) {
+    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
+                                       thread->id());
+    // TODO(dje): For now. This isn't an error in the normal sense.
+    return;
+  }
+
+  ioctl_ipt_assign_buffer_thread_t assign;
+  assign.thread = thread->handle();
+  assign.descriptor = thread->ipt_buffer();
+  ssize_t ssize = ioctl_ipt_assign_buffer_thread(ipt_fd, &assign);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("assigning ipt buffer to thread", ssize);
+    goto Fail;
+  }
+
+ Fail:
+  close(ipt_fd);
+}
+
+// Reset perf collection to its original state.
+// This means restoring ktrace to its original state.
+// This assumes tracing has already been stopped.
+
+void ResetPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "ResetPerf called";
+
+  mx_handle_t ktrace_handle;
+  if (!OpenDevices(nullptr, nullptr, &ktrace_handle))
+    return;
  
   // TODO(dje): Resume original ktracing.
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_REWIND, 0, nullptr);
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
+
   mx_handle_close(ktrace_handle);
 }
 

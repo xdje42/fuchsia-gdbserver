@@ -17,7 +17,7 @@ struct ProcessorTraceFeatures {
   bool initialized;
   bool have_pt;
 
-  bool cr3_match;
+  bool cr3_filtering;
   bool cycle_accurate_mode;
   bool ip_filtering;
   bool mtc;

@@ -41,6 +41,9 @@ Thread::Thread(Process* process, mx_handle_t debug_handle, mx_koid_t id)
       debug_handle_(debug_handle),
       id_(id),
       state_(State::kNew),
+#ifdef __x86_64__
+      ipt_buffer_(-1),
+#endif
       breakpoints_(this),
       weak_ptr_factory_(this) {
   FTL_DCHECK(process_);

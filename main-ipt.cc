@@ -100,6 +100,11 @@ int main(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
+  if (!debugserver::arch::x86::HaveProcessorTrace()) {
+    FTL_LOG(ERROR) << "PT not supported";
+    return EXIT_FAILURE;
+  }
+
   debugserver::PerfConfig config;
   std::string arg;
 
@@ -162,6 +167,7 @@ int main(int argc, char* argv[]) {
       FTL_LOG(ERROR) << "Program cannot be specified";
       return EXIT_FAILURE;
     }
+    // We only support the cpu mode here.
     if (cl.HasOption("mode", nullptr)) {
       FTL_LOG(ERROR) << "Mode cannot be specified";
       return EXIT_FAILURE;
@@ -169,13 +175,15 @@ int main(int argc, char* argv[]) {
   }
 
   if (cl.HasOption("init", nullptr)) {
-    if (!debugserver::InitPerf(config))
+    if (!debugserver::InitCpuPerf(config))
+      return EXIT_FAILURE;
+    if (!debugserver::InitPerfPreProcess(config))
       return EXIT_FAILURE;
     return EXIT_SUCCESS;
   }
 
   if (cl.HasOption("start", nullptr)) {
-    if (!debugserver::StartPerf(config)) {
+    if (!debugserver::StartCpuPerf(config)) {
       FTL_LOG(WARNING) << "Start failed, but buffers not removed";
       return EXIT_FAILURE;
     }
@@ -183,16 +191,18 @@ int main(int argc, char* argv[]) {
   }
 
   if (cl.HasOption("stop", nullptr)) {
+    debugserver::StopCpuPerf(config);
     debugserver::StopPerf(config);
     return EXIT_SUCCESS;
   }
 
   if (cl.HasOption("dump", nullptr)) {
-    debugserver::DumpPerf(config);
+    debugserver::DumpCpuPerf(config);
     return EXIT_SUCCESS;
   }
 
   if (cl.HasOption("reset", nullptr)) {
+    debugserver::ResetCpuPerf(config);
     debugserver::ResetPerf(config);
     return EXIT_SUCCESS;
   }
