@@ -226,11 +226,14 @@ void PrintException(Process* process, Thread* thread, mx_excp_type_t type,
     case MX_EXCP_START:
       printf("Thread %s started\n", thread->GetDebugName().c_str());
       break;
+    case MX_EXCP_THREAD_EXIT:
+      printf("Thread %s exited\n", thread->GetDebugName().c_str());
+      break;
     case MX_EXCP_GONE:
       if (thread)
-        printf("Thread %s exited\n", thread->GetDebugName().c_str());
+        printf("Thread %s is gone\n", thread->GetDebugName().c_str());
       else
-        printf("Process %s exited, rc %d\n",
+        printf("Process %s is gone, rc %d\n",
                process->GetName().c_str(), process->ExitCode());
       break;
     default:

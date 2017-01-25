@@ -24,10 +24,11 @@ class Thread final {
  public:
   enum class State {
     kNew,
-    kGone,
     kStopped,
     kRunning,
     kStepping,
+    kExiting,
+    kGone,
   };
 
   Thread(Process* process, mx_handle_t debug_handle, mx_koid_t id);

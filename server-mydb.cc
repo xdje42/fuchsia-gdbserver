@@ -129,14 +129,19 @@ void MydbServer::OnThreadStarted(Process* process,
   }
 }
 
-void MydbServer::OnProcessOrThreadExited(Process* process,
-                                         Thread* thread,
-                                         const mx_excp_type_t type,
-                                         const mx_exception_context_t& context) {
-  // If the process is gone, unset current thread.
-  if (!thread)
-    SetCurrentThread(nullptr);
+void MydbServer::OnThreadExit(Process* process,
+                              Thread* thread,
+                              const mx_excp_type_t type,
+                              const mx_exception_context_t& context) {
   PrintException(process, thread, type, context);
+}
+
+void MydbServer::OnProcessExit(Process* process,
+                               const mx_excp_type_t type,
+                               const mx_exception_context_t& context) {
+  // If the process is gone, unset current thread.
+  SetCurrentThread(nullptr);
+  PrintException(process, nullptr, type, context);
 }
 
 void MydbServer::OnArchitecturalException(Process* process,

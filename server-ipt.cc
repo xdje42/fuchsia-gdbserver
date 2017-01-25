@@ -159,34 +159,47 @@ void IptServer::OnThreadStarted(Process* process,
   if (config_.mode == IPT_MODE_THREADS) {
     if (!InitThreadPerf(thread, config_))
       goto Fail;
-    if (!StartThreadPerf(thread, config_))
+    if (!StartThreadPerf(thread, config_)) {
+      ResetThreadPerf(thread, config_);
       goto Fail;
-    // xyzdje
+    }
   }
 
  Fail:
   thread->Resume();
 }
 
-void IptServer::OnProcessOrThreadExited(Process* process,
-                                        Thread* thread,
-                                        const mx_excp_type_t type,
-                                        const mx_exception_context_t& context) {
+void IptServer::OnThreadExit(Process* process,
+                             Thread* thread,
+                             const mx_excp_type_t type,
+                             const mx_exception_context_t& context) {
   FTL_DCHECK(process);
+  FTL_DCHECK(thread);
 
   PrintException(process, thread, type, context);
 
-  if (thread) {
-    // Dump any collected trace.
-    // xyzdje
+  // Dump any collected trace.
+  if (thread->ipt_buffer() >= 0) {
     StopThreadPerf(thread, config_);
     DumpThreadPerf(thread, config_);
     ResetThreadPerf(thread, config_);
-  } else {
-    // If the process is gone, unset current thread, and exit main loop.
-    SetCurrentThread(nullptr);
-    QuitMessageLoop(true);
   }
+
+  // We still have to "resume" the thread so that the o/s will complete the
+  // termination of the thread.
+  thread->Resume();
+}
+
+void IptServer::OnProcessExit(Process* process,
+                              const mx_excp_type_t type,
+                              const mx_exception_context_t& context) {
+  FTL_DCHECK(process);
+
+  PrintException(process, nullptr, type, context);
+
+  // If the process is gone, unset current thread, and exit main loop.
+  SetCurrentThread(nullptr);
+  QuitMessageLoop(true);
 }
 
 void IptServer::OnArchitecturalException(Process* process,

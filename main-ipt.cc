@@ -198,6 +198,7 @@ int main(int argc, char* argv[]) {
 
   if (cl.HasOption("dump", nullptr)) {
     debugserver::DumpCpuPerf(config);
+    debugserver::DumpPerf(config);
     return EXIT_SUCCESS;
   }
 

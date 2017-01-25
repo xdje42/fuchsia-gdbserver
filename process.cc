@@ -550,36 +550,42 @@ void Process::OnException(const mx_excp_type_t type,
   }
 
   switch (type) {
-    case MX_EXCP_START:
-      FTL_VLOG(1) << "Received MX_EXCP_START exception";
-      FTL_DCHECK(thread);
-      FTL_DCHECK(thread->state() == Thread::State::kNew);
-      delegate_->OnThreadStarted(this, thread, context);
-      // Delay updating process state until after notifying the
-      // delegate so that it can see the previous state.
-      // Once a thread has started the process is running.
-      if (state_ == Process::State::kStarting)
-        set_state(Process::State::kRunning);
-      break;
-    case MX_EXCP_GONE:
-      if (thread) {
-        FTL_VLOG(1) << "Received MX_EXCP_GONE exception for thread "
-                    << thread->GetName();
-        thread->set_state(Thread::State::kGone);
-        // TODO: Split up OnProcessOrThreadExited into process/thread.
-        delegate_->OnProcessOrThreadExited(this, thread, type, context);
-        thread->Clear();
-      } else {
-        FTL_VLOG(1) << "Received MX_EXCP_GONE exception for process "
-                    << GetName();
-        set_state(Process::State::kGone);
-        delegate_->OnProcessOrThreadExited(this, thread, type, context);
-        Clear();
-      }
-      break;
-    default:
-      FTL_LOG(ERROR) << "Ignoring unrecognized synthetic exception: " << type;
-      break;
+  case MX_EXCP_START:
+    FTL_VLOG(1) << "Received MX_EXCP_START exception";
+    FTL_DCHECK(thread);
+    FTL_DCHECK(thread->state() == Thread::State::kNew);
+    delegate_->OnThreadStarted(this, thread, context);
+    // Delay updating process state until after notifying the
+    // delegate so that it can see the previous state.
+    // Once a thread has started the process is running.
+    if (state_ == Process::State::kStarting)
+      set_state(Process::State::kRunning);
+    break;
+  case MX_EXCP_THREAD_EXIT:
+    FTL_VLOG(1) << "Received MX_EXCP_THREAD_EXIT exception for thread "
+                << thread->GetName();
+    thread->set_state(Thread::State::kExiting);
+    delegate_->OnThreadExit(this, thread, type, context);
+    // Note: At this point the thread's state is kRunning which happens because
+    // we need to "resume" the thread so that the o/s will complete the
+    // termination of the thread. This is ok (for now anyway), since we're
+    // about to change the state go kGone, but heads up.
+    thread->set_state(Thread::State::kGone);
+    thread->Clear();
+    break;
+  case MX_EXCP_GONE:
+    // We shouldn't be getting thread gone notifications.
+    // Those only go to exception ports attached directly to threads.
+    FTL_DCHECK(!thread);
+    FTL_VLOG(1) << "Received MX_EXCP_GONE exception for process "
+                << GetName();
+    set_state(Process::State::kGone);
+    delegate_->OnProcessExit(this, type, context);
+    Clear();
+    break;
+  default:
+    FTL_LOG(ERROR) << "Ignoring unrecognized synthetic exception: " << type;
+    break;
   }
 }
 

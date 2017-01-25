@@ -32,6 +32,8 @@ void DumpCpuPerf(const PerfConfig& config);
 
 void DumpThreadPerf(Thread* thread, const PerfConfig& config);
 
+void DumpPerf(const PerfConfig& config);
+
 void ResetCpuPerf(const PerfConfig& config);
 
 void ResetThreadPerf(Thread* thread, const PerfConfig& config);

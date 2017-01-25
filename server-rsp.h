@@ -124,10 +124,13 @@ class RspServer final : public Server {
   void OnThreadStarted(Process* process,
                        Thread* thread,
                        const mx_exception_context_t& context) override;
-  void OnProcessOrThreadExited(Process* process,
-                               Thread* thread,
-                               const mx_excp_type_t type,
-                               const mx_exception_context_t& context) override;
+  void OnThreadExit(Process* process,
+                    Thread* thread,
+                    const mx_excp_type_t type,
+                    const mx_exception_context_t& context) override;
+  void OnProcessExit(Process* process,
+                     const mx_excp_type_t type,
+                     const mx_exception_context_t& context) override;
   void OnArchitecturalException(Process* process,
                                 Thread* thread,
                                 const mx_excp_type_t type,

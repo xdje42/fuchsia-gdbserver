@@ -247,16 +247,16 @@ bool StartThreadPerf(Thread* thread, const PerfConfig& config) {
   FTL_LOG(INFO) << "StartThreadPerf called";
   FTL_DCHECK(config.mode == IPT_MODE_THREADS);
 
-  int ipt_fd;
-  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
-    return false;
-
   if (thread->ipt_buffer() < 0) {
     FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
                                        thread->id());
     // TODO(dje): For now. This isn't an error in the normal sense.
     return true;
   }
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return false;
 
   ioctl_ipt_assign_buffer_thread_t assign;
   assign.thread = thread->handle();
@@ -295,6 +295,28 @@ void StopCpuPerf(const PerfConfig& config) {
 void StopThreadPerf(Thread* thread, const PerfConfig& config) {
   FTL_LOG(INFO) << "StopThreadPerf called";
   FTL_DCHECK(config.mode == IPT_MODE_THREADS);
+
+  if (thread->ipt_buffer() < 0) {
+    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
+                                       thread->id());
+    return;
+  }
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return;
+
+  ioctl_ipt_assign_buffer_thread_t assign;
+  assign.thread = thread->handle();
+  assign.descriptor = thread->ipt_buffer();
+  ssize_t ssize = ioctl_ipt_release_buffer_thread(ipt_fd, &assign);
+  if (ssize < 0) {
+    util::LogErrorWithMxStatus("releasing ipt buffer from thread", ssize);
+    goto Fail;
+  }
+
+ Fail:
+  close(ipt_fd);
 }
 
 void StopPerf(const PerfConfig& config) {
@@ -314,11 +336,13 @@ void StopPerf(const PerfConfig& config) {
   mx_handle_close(ktrace_handle);
 }
 
-// Subroutine of DumpCpuPerf to simplify it.
+// Write the contents of buffer |descriptor| to a file.
+// The file's name is output_prefix.buffer.pt.
 
-static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
-                                uint32_t cpu, const char* output_prefix) {
-  std::string output_path = ftl::StringPrintf("%s.%u.pt", output_prefix, cpu);
+static mx_status_t WriteBufferData(const PerfConfig& config, int ipt_fd,
+                                   uint32_t descriptor,
+                                   const char* output_prefix) {
+  std::string output_path = ftl::StringPrintf("%s.%u.pt", output_prefix, descriptor);
   const char* c_path = output_path.c_str();
 
   int fd = -1;
@@ -327,10 +351,10 @@ static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
   char buf[4096];
 
   ioctl_ipt_buffer_data_t data;
-  ssize_t ssize = ioctl_ipt_get_buffer_data(ipt_fd, &cpu, &data);
+  ssize_t ssize = ioctl_ipt_get_buffer_data(ipt_fd, &descriptor, &data);
   if (ssize < 0) {
-    util::LogErrorWithMxStatus(ftl::StringPrintf("ioctl_ipt_get_buffer_data: cpu %u",
-                                                 cpu),
+    util::LogErrorWithMxStatus(ftl::StringPrintf("ioctl_ipt_get_buffer_data: buffer %u",
+                                                 descriptor),
                                ssize);
     goto Fail;
   }
@@ -346,13 +370,13 @@ static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
   bytes_left = data.capture_size;
   for (uint32_t i = 0; i < config.num_buffers && bytes_left > 0; ++i) {
     ioctl_ipt_buffer_handle_rqst_t handle_rqst;
-    handle_rqst.descriptor = cpu;
+    handle_rqst.descriptor = descriptor;
     handle_rqst.buffer_num = i;
     mx_handle_t vmo;
     ssize = ioctl_ipt_get_buffer_handle(ipt_fd, &handle_rqst, &vmo);
     if (ssize < 0) {
-      util::LogErrorWithMxStatus(ftl::StringPrintf("ioctl_ipt_get_buffer_handle: cpu %u, buffer %u",
-                                                   cpu, i),
+      util::LogErrorWithMxStatus(ftl::StringPrintf("ioctl_ipt_get_buffer_handle: buffer %u, buffer %u",
+                                                   descriptor, i),
                                  ssize);
       goto Fail;
     }
@@ -371,8 +395,8 @@ static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
       size_t actual;
       status = mx_vmo_read(vmo, buf, offset, to_write, &actual);
       if (status != NO_ERROR) {
-        util::LogErrorWithMxStatus(ftl::StringPrintf("mx_vmo_read: cpu %u, buffer %u, offset %zu",
-                                                     cpu, i, offset),
+        util::LogErrorWithMxStatus(ftl::StringPrintf("mx_vmo_read: buffer %u, buffer %u, offset %zu",
+                                                     descriptor, i, offset),
                                    status);
         goto Fail;
       }
@@ -407,13 +431,14 @@ static mx_status_t WriteCpuData(const PerfConfig& config, int ipt_fd,
 
 void DumpCpuPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "DumpCpuPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_CPUS);
 
-  int ipt_fd, ktrace_fd;
-  if (!OpenDevices(&ipt_fd, &ktrace_fd, nullptr))
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
     return;
 
   for (uint32_t cpu = 0; cpu < config.num_cpus; ++cpu) {
-    auto status = WriteCpuData(config, ipt_fd, cpu, pt_output_path_prefix);
+    auto status = WriteBufferData(config, ipt_fd, cpu, pt_output_path_prefix);
     if (status != NO_ERROR) {
       util::LogErrorWithMxStatus(ftl::StringPrintf("dump perf of cpu %u", cpu),
                                  status);
@@ -422,6 +447,43 @@ void DumpCpuPerf(const PerfConfig& config) {
   }
 
   close(ipt_fd);
+}
+
+// Write the buffer contents for |thread|.
+// This assumes the thread is stopped.
+
+void DumpThreadPerf(Thread* thread, const PerfConfig& config) {
+  FTL_LOG(INFO) << "DumpThreadPerf called";
+  FTL_DCHECK(config.mode == IPT_MODE_THREADS);
+
+  if (thread->ipt_buffer() < 0) {
+    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
+                                       thread->id());
+    return;
+  }
+
+  int ipt_fd;
+  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
+    return;
+
+  uint32_t descriptor = thread->ipt_buffer();
+  auto status = WriteBufferData(config, ipt_fd, descriptor,
+                                pt_output_path_prefix);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus(ftl::StringPrintf("dump perf of thread buffer %u",
+                                                 descriptor),
+                               status);
+  }
+
+  close(ipt_fd);
+}
+
+void DumpPerf(const PerfConfig& config) {
+  FTL_LOG(INFO) << "DumpPerf called";
+
+  int ktrace_fd;
+  if (!OpenDevices(nullptr, &ktrace_fd, nullptr))
+    return;
 
   int dest_fd = open(ktrace_output_path, O_CREAT | O_TRUNC | O_RDWR,
                      S_IRUSR | S_IWUSR);
@@ -449,34 +511,6 @@ void DumpCpuPerf(const PerfConfig& config) {
   }
 }
 
-void DumpThreadPerf(Thread* thread, const PerfConfig& config) {
-  FTL_LOG(INFO) << "DumpThreadPerf called";
-  FTL_DCHECK(config.mode == IPT_MODE_THREADS);
-
-  int ipt_fd;
-  if (!OpenDevices(&ipt_fd, nullptr, nullptr))
-    return;
-
-  if (thread->ipt_buffer() < 0) {
-    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
-                                       thread->id());
-    // TODO(dje): For now. This isn't an error in the normal sense.
-    return;
-  }
-
-  ioctl_ipt_assign_buffer_thread_t assign;
-  assign.thread = thread->handle();
-  assign.descriptor = thread->ipt_buffer();
-  ssize_t ssize = ioctl_ipt_assign_buffer_thread(ipt_fd, &assign);
-  if (ssize < 0) {
-    util::LogErrorWithMxStatus("assigning ipt buffer to thread", ssize);
-    goto Fail;
-  }
-
- Fail:
-  close(ipt_fd);
-}
-
 // Reset perf collection to its original state.
 // This means freeing all PT resources.
 // This assumes tracing has already been stopped.
@@ -501,27 +535,25 @@ void ResetThreadPerf(Thread* thread, const PerfConfig& config) {
   FTL_LOG(INFO) << "ResetThreadPerf called";
   FTL_DCHECK(config.mode == IPT_MODE_THREADS);
 
+  if (thread->ipt_buffer() < 0) {
+    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
+                                       thread->id());
+    return;
+  }
+
   int ipt_fd;
   if (!OpenDevices(&ipt_fd, nullptr, nullptr))
     return;
 
-  if (thread->ipt_buffer() < 0) {
-    FTL_LOG(INFO) << ftl::StringPrintf("Thread %" PRId64 " has no IPT buffer",
-                                       thread->id());
-    // TODO(dje): For now. This isn't an error in the normal sense.
-    return;
-  }
-
-  ioctl_ipt_assign_buffer_thread_t assign;
-  assign.thread = thread->handle();
-  assign.descriptor = thread->ipt_buffer();
-  ssize_t ssize = ioctl_ipt_assign_buffer_thread(ipt_fd, &assign);
+  uint32_t descriptor = thread->ipt_buffer();
+  ssize_t ssize = ioctl_ipt_free_buffer(ipt_fd, &descriptor);
   if (ssize < 0) {
-    util::LogErrorWithMxStatus("assigning ipt buffer to thread", ssize);
+    util::LogErrorWithMxStatus("freeing ipt buffer", ssize);
     goto Fail;
   }
 
  Fail:
+  thread->set_ipt_buffer(-1);
   close(ipt_fd);
 }
 

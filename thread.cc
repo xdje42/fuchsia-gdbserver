@@ -75,7 +75,7 @@ void Thread::set_state(State state) {
 }
 
 void Thread::Clear() {
-  // We close the handle here so the o/s will release the thread.
+  // We close the handle here so that the o/s will release the thread.
   if (debug_handle_ != MX_HANDLE_INVALID)
     mx_handle_close(debug_handle_);
   debug_handle_ = MX_HANDLE_INVALID;
@@ -114,7 +114,12 @@ void Thread::OnArchException(const mx_exception_context_t& context) {
 }
 
 bool Thread::Resume() {
-  if (state() != State::kStopped && state() != State::kNew) {
+  switch (state()) {
+  case State::kNew:
+  case State::kStopped:
+  case State::kExiting:
+    break;
+  default:
     FTL_LOG(ERROR) << "Cannot resume a thread while in state: "
                    << StateName(state());
     return false;
