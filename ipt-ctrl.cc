@@ -88,7 +88,6 @@ static bool OpenDevices(int* out_ipt_fd, int* out_ktrace_fd,
 
 bool SetPerfMode(const PerfConfig& config) {
   int ipt_fd;
-
   if (!OpenDevices(&ipt_fd, nullptr, nullptr))
     return false;
 
@@ -170,9 +169,11 @@ bool InitThreadPerf(Thread* thread, const PerfConfig& config) {
   }
 
   thread->set_ipt_buffer(descriptor);
+  close(ipt_fd);
   return true;
 
  Fail:
+  close(ipt_fd);
   return false;
 }
 
@@ -207,10 +208,10 @@ bool InitPerfPreProcess(const PerfConfig& config) {
     goto Fail;
   }
 
+  mx_handle_close(ktrace_handle);
   return true;
 
  Fail:
-
   // TODO(dje): Resume original ktracing.
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
@@ -238,7 +239,6 @@ bool StartCpuPerf(const PerfConfig& config) {
   return true;
 
  Fail:
-
   close(ipt_fd);
   return false;
 }
@@ -259,9 +259,17 @@ bool StartThreadPerf(Thread* thread, const PerfConfig& config) {
     return false;
 
   ioctl_ipt_assign_buffer_thread_t assign;
-  assign.thread = thread->handle();
+  mx_status_t status;
+  ssize_t ssize;
+
+  status = mx_handle_duplicate(thread->handle(), MX_RIGHT_SAME_RIGHTS,
+                               &assign.thread);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("duplicating thread handle", status);
+    goto Fail;
+  }
   assign.descriptor = thread->ipt_buffer();
-  ssize_t ssize = ioctl_ipt_assign_buffer_thread(ipt_fd, &assign);
+  ssize = ioctl_ipt_assign_buffer_thread(ipt_fd, &assign);
   if (ssize < 0) {
     util::LogErrorWithMxStatus("assigning ipt buffer to thread", ssize);
     goto Fail;
@@ -307,9 +315,17 @@ void StopThreadPerf(Thread* thread, const PerfConfig& config) {
     return;
 
   ioctl_ipt_assign_buffer_thread_t assign;
-  assign.thread = thread->handle();
+  mx_handle_t status;
+  ssize_t ssize;
+
+  status = mx_handle_duplicate(thread->handle(), MX_RIGHT_SAME_RIGHTS,
+                               &assign.thread);
+  if (status != NO_ERROR) {
+    util::LogErrorWithMxStatus("duplicating thread handle", status);
+    goto Fail;
+  }
   assign.descriptor = thread->ipt_buffer();
-  ssize_t ssize = ioctl_ipt_release_buffer_thread(ipt_fd, &assign);
+  ssize = ioctl_ipt_release_buffer_thread(ipt_fd, &assign);
   if (ssize < 0) {
     util::LogErrorWithMxStatus("releasing ipt buffer from thread", ssize);
     goto Fail;
@@ -564,15 +580,24 @@ void ResetThreadPerf(Thread* thread, const PerfConfig& config) {
 void ResetPerf(const PerfConfig& config) {
   FTL_LOG(INFO) << "ResetPerf called";
 
+  int ipt_fd;
   mx_handle_t ktrace_handle;
-  if (!OpenDevices(nullptr, nullptr, &ktrace_handle))
+  if (!OpenDevices(&ipt_fd, nullptr, &ktrace_handle))
     return;
- 
+
+  // FIXME(dje): Workaround to switching from thread mode to cpu mode:
+  // xrstors gets a gpf -> panic.
+  uint32_t mode = IPT_MODE_CPUS;
+  ssize_t ssize = ioctl_ipt_set_mode(ipt_fd, &mode);
+  if (ssize < 0)
+    util::LogErrorWithMxStatus("reset perf mode", ssize);
+
   // TODO(dje): Resume original ktracing.
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_STOP, 0, nullptr);
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_REWIND, 0, nullptr);
   mx_ktrace_control(ktrace_handle, KTRACE_ACTION_START, 0, nullptr);
 
+  close(ipt_fd);
   mx_handle_close(ktrace_handle);
 }
 

@@ -93,6 +93,7 @@ bool IptServer::DumpResults() {
   StopPerf(config_);
   if (config_.mode == IPT_MODE_CPUS)
     DumpCpuPerf(config_);
+  DumpPerf(config_);
   if (config_.mode == IPT_MODE_CPUS)
     ResetCpuPerf(config_);
   ResetPerf(config_);

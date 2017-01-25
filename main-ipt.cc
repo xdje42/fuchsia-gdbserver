@@ -36,7 +36,7 @@
 
 constexpr char kUsageString[] =
     "Usage: ipt [options] program [args...]\n"
-    "       ipt [options] step-option\n"
+    "       ipt [options] phase-option\n"
     "\n"
     "  program - the path to the executable to run\n"
     "\n"
@@ -56,7 +56,7 @@ constexpr char kUsageString[] =
     "  --mode=cpu|thread  set the tracing mode\n"
     "                     Must be specified with a program to run.\n"
     "\n"
-    "Options for controlling steps in process:\n"
+    "Options for controlling phases in the data collection:\n"
     "Only the first one seen is processed.\n"
     "These cannot be specified with a program to run.\n"
     "\n"
@@ -168,10 +168,12 @@ int main(int argc, char* argv[]) {
       return EXIT_FAILURE;
     }
     // We only support the cpu mode here.
-    if (cl.HasOption("mode", nullptr)) {
-      FTL_LOG(ERROR) << "Mode cannot be specified";
+    if (config.mode != IPT_MODE_CPUS) {
+      FTL_LOG(ERROR) << "Phase option requires cpu mode";
       return EXIT_FAILURE;
     }
+    if (!SetPerfMode(config))
+      return EXIT_FAILURE;
   }
 
   if (cl.HasOption("init", nullptr)) {
