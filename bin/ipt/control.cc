@@ -135,7 +135,12 @@ bool InitCpuPerf(const IptConfig& config) {
     ipt_config.num_buffers = config.num_buffers;
     ipt_config.buffer_order = config.buffer_order;
     ipt_config.is_circular = config.is_circular;
-    ipt_config.ctl = config.ctl_config;
+    ipt_config.ctl = config.CtlMsr();
+    ipt_config.cr3_match = config.cr3_match;
+    ipt_config.addr_ranges[0].a = config.AddrBegin(0);
+    ipt_config.addr_ranges[0].b = config.AddrEnd(0);
+    ipt_config.addr_ranges[1].a = config.AddrBegin(1);
+    ipt_config.addr_ranges[1].b = config.AddrEnd(1);
     ssize = ioctl_ipt_alloc_buffer(ipt_fd.get(), &ipt_config, &descriptor);
     if (ssize < 0) {
       util::LogErrorWithMxStatus("init cpu perf", ssize);
@@ -171,7 +176,12 @@ bool InitThreadPerf(Thread* thread, const IptConfig& config) {
   ipt_config.num_buffers = config.num_buffers;
   ipt_config.buffer_order = config.buffer_order;
   ipt_config.is_circular = config.is_circular;
-  ipt_config.ctl = config.ctl_config;
+  ipt_config.ctl = config.CtlMsr();
+  ipt_config.cr3_match = config.cr3_match;
+  ipt_config.addr_ranges[0].a = config.AddrBegin(0);
+  ipt_config.addr_ranges[0].b = config.AddrEnd(0);
+  ipt_config.addr_ranges[1].a = config.AddrBegin(1);
+  ipt_config.addr_ranges[1].b = config.AddrEnd(1);
   ssize_t ssize = ioctl_ipt_alloc_buffer(ipt_fd.get(), &ipt_config,
                                          &descriptor);
   if (ssize < 0) {
@@ -594,7 +604,7 @@ void DumpPerf(const IptConfig& config, const std::string& output_path_prefix) {
       // for it as any. See intel-pt.h:pt_config.
       // Alternatively this could be added to the ktrace record.
       // TODO(dje): Put constants in magenta/device/intel-pt.h.
-      unsigned mtc_freq = (config.ctl_config & IPT_CTL_MTC_FREQ) >> 14;
+      unsigned mtc_freq = config.mtc_freq;
       fprintf(f, "mtc_freq: %u\n", mtc_freq);
       fclose(f);
     } else {

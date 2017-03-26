@@ -15,6 +15,7 @@
 #include <launchpad/launchpad.h>
 #include <magenta/syscalls.h>
 
+#include "lib/ftl/arraysize.h"
 #include "lib/ftl/logging.h"
 #include "lib/ftl/strings/string_printf.h"
 
@@ -23,6 +24,44 @@
 #include "control.h"
 
 namespace debugserver {
+
+uint64_t IptConfig::CtlMsr() const {
+  uint64_t msr = 0;
+
+  if (cyc)
+    msr |= 1 << 1;
+  if (os)
+    msr |= 1 << 2;
+  if (user)
+    msr |= 1 << 3;
+  if (cr3_match)
+    msr |= 1 << 7;
+  if (mtc)
+    msr |= 1 << 9;
+  if (tsc)
+    msr |= 1 << 10;
+  if (!retc)
+    msr |= 1 << 11;
+  if (branch)
+    msr |= 1 << 13;
+  msr |= (mtc_freq & 15) << 14;
+  msr |= (cyc_thresh & 15) << 19;
+  msr |= (psb_freq & 15) << 24;
+  msr |= (uint64_t) addr[0] << 32;
+  msr |= (uint64_t) addr[1] << 36;
+
+  return msr;
+}
+
+uint64_t IptConfig::AddrBegin(unsigned i) const {
+  FTL_DCHECK(i < arraysize(addr_range));
+  return addr_range[i].begin;
+}
+
+uint64_t IptConfig::AddrEnd(unsigned i) const {
+  FTL_DCHECK(i < arraysize(addr_range));
+  return addr_range[i].end;
+}
 
 IptServer::IptServer(const IptConfig& config,
                      const std::string& output_path_prefix)
@@ -62,6 +101,10 @@ bool IptServer::StartInferior() {
     return false;
   }
   FTL_DCHECK(process->IsAttached());
+
+  if (!config_.cr3_match_set) {
+    // TODO(dje): fetch cr3 for inferior and apply it to cr3_match
+  }
 
   // If tracing cpus, defer turning on tracing as long as possible so that we
   // don't include all the initialization. For threads it doesn't matter.

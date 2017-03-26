@@ -7,7 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <climits>
+#ifdef __APPLE__
+#include "osx-elf.h" // TODO(dje): Private copy until available on osx.
+#else
 #include <elf.h>
+#endif
 #include <memory>
 
 #include "memory.h"

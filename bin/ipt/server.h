@@ -24,10 +24,6 @@ constexpr uint32_t kDefaultMaxThreads = 16;
 constexpr size_t kDefaultNumBuffers = 16;
 constexpr size_t kDefaultBufferOrder = 2;  // 16kb
 constexpr bool kDefaultIsCircular = false;
-constexpr uint64_t kDefaultCtlConfig = (
-  IPT_CTL_OS_ALLOWED | IPT_CTL_USER_ALLOWED |
-  IPT_CTL_BRANCH_EN |
-  IPT_CTL_TSC_EN);
 
 // The parameters controlling data collection.
 
@@ -39,8 +35,23 @@ struct IptConfig {
       num_buffers(kDefaultNumBuffers),
       buffer_order(kDefaultBufferOrder),
       is_circular(kDefaultIsCircular),
-      ctl_config(kDefaultCtlConfig)
-    { }
+      branch(true),
+      cr3_match(0),
+      cr3_match_set(false),
+      cyc(false),
+      cyc_thresh(0),
+      mtc(false),
+      mtc_freq(0),
+      psb_freq(0),
+      os(true),
+      user(true),
+      retc(true),
+      tsc(true)
+    {
+      addr[0] = AddrFilter::kOff;
+      addr[1] = AddrFilter::kOff;
+    }
+
   // One of IPT_MODE_CPUS, IPT_MODE_THREADS.
   uint32_t mode;
   // The number of cpus on this system, as reported by mx_system_get_num_cpus().
@@ -50,7 +61,37 @@ struct IptConfig {
   size_t num_buffers;
   size_t buffer_order;
   bool is_circular;
-  uint64_t ctl_config;
+
+  enum class AddrFilter { kOff = 0, kEnable = 1, kStop = 2 };
+  struct AddrRange {
+    // "" if no ELF
+    std::string elf;
+    uint64_t begin, end;
+  };
+
+  // The various fields of IA32_RTIT_CTL MSR, and support MSRs.
+  AddrFilter addr[2];
+  AddrRange addr_range[2];
+  bool branch;
+  // zero if disabled
+  uint64_t cr3_match;
+  // True if cr3_match was specified on the command line.
+  bool cr3_match_set;
+  bool cyc;
+  uint32_t cyc_thresh;
+  bool mtc;
+  uint32_t mtc_freq;
+  uint32_t psb_freq;
+  bool os, user;
+  bool retc;
+  bool tsc;
+
+  // Return the value to write to the CTL MSR.
+  uint64_t CtlMsr() const;
+
+  // Return values for the addr range MSRs.
+  uint64_t AddrBegin(unsigned index) const;
+  uint64_t AddrEnd(unsigned index) const;
 };
 
 // IptServer implements the main loop, which basically just waits until
