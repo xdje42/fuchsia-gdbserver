@@ -218,22 +218,6 @@ void PrettyPrinter::PrintTime(uint64_t ts, uint64_t* last_ts,
   Printf("%-24s", buf);
 }
 
-static const char* InsnClass(enum pt_insn_class iclass)
-{
-  static const char* const class_name[] = {
-    [ptic_error] = "error",
-    [ptic_other] = "other",
-    [ptic_call] = "call",
-    [ptic_return] = "ret",
-    [ptic_jump] = "jump",
-    [ptic_cond_jump] = "cjump",
-    [ptic_far_call] = "fcall",
-    [ptic_far_return] = "fret",
-    [ptic_far_jump] = "fjump",
-  };
-  return iclass < ARRAY_SIZE(class_name) ? class_name[iclass] : "?";
-}
-
 #ifdef HAVE_UDIS86
 
 struct dis

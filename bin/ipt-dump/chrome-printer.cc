@@ -4,10 +4,6 @@
 
 #include "chrome-printer.h"
 
-#define _GNU_SOURCE 1
-
-#include <assert.h>
-#include <ctype.h>
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>

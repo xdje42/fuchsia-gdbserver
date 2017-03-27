@@ -12,6 +12,8 @@ executable("ipt-dump") {
     "pretty-printer.h",
     "printer.cc",
     "printer.h",
+    "raw-printer.cc",
+    "raw-printer.h",
   ]
 
   deps = [

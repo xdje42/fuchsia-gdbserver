@@ -21,6 +21,7 @@
 #include "chrome-printer.h"
 #include "pretty-printer.h"
 #include "printer.h"
+#include "raw-printer.h"
 
 using namespace intel_processor_trace;
 
@@ -330,19 +331,14 @@ static int ParseArgv(int argc, char** argv,
     return -1;
   }
   if (decoder_config->ktrace_file_name == "") {
-    FTL_LOG(ERROR) << "--ktrace=FILE must be specified";
-    return -1;
+    FTL_LOG(WARNING) << "missing --ktrace=FILE, output may be limited";
   }
-#if 0 // TODO(dje): still needed?
   if (decoder_config->ids_file_names.size() == 0) {
-    FTL_LOG(ERROR) << "--ids=FILE must be specified";
-    return -1;
+    FTL_LOG(WARNING) << "missing --ids=FILE, output will be limited";
   }
   if (decoder_config->map_file_names.size() == 0) {
-    FTL_LOG(ERROR) << "--map=FILE must be specified";
-    return -1;
+    FTL_LOG(WARNING) << "missing --map=FILE, output will be limited";
   }
-#endif
 
   return n;
 }
@@ -379,7 +375,14 @@ int main(int argc, char** argv)
   }
 
   uint64_t total_insns;
-  if (printer_config.output_format == OutputFormat::kCalls) {
+  if (printer_config.output_format == OutputFormat::kRaw) {
+    auto printer = RawPrinter::Create(decoder.get(), printer_config);
+    if (!printer) {
+      FTL_LOG(ERROR) << "Error creating printer";
+      return EXIT_FAILURE;
+    }
+    total_insns = printer->PrintFiles();
+  } else if (printer_config.output_format == OutputFormat::kCalls) {
     auto printer = PrettyPrinter::Create(decoder.get(), printer_config);
     if (!printer) {
       FTL_LOG(ERROR) << "Error creating printer";
@@ -393,7 +396,7 @@ int main(int argc, char** argv)
       return EXIT_FAILURE;
     }
     total_insns = printer->PrintFiles();
-  } else { // TODO(dje): RAW
+  } else {
     FTL_LOG(ERROR) << "Invalid output format\n";
     return EXIT_FAILURE;
   }

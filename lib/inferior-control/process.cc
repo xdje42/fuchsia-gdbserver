@@ -620,7 +620,7 @@ void Process::TryBuildLoadedDsosList(Thread* thread, bool check_ldso_bkpt) {
                                               &debug_addr, sizeof(debug_addr));
   if (status != NO_ERROR) {
     FTL_LOG(ERROR) << "mx_object_get_property(MX_PROP_PROCESS_DEBUG_ADDR), unable to fetch dso list: "
-		   << MxErrorString(status);
+		   << status; // TODO(dje): error string
     return;
   }
 

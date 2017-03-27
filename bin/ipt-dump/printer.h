@@ -108,6 +108,8 @@ struct IptInsn {
   unsigned iterations;
 };
 
+const char* InsnClass(enum pt_insn_class iclass);
+
 void TransferEvents(IptInsn* si, const struct pt_insn* insn);
 
 } // intel_processor_trace
